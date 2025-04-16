@@ -17,7 +17,7 @@ class LivepeerI2T(LivepeerBase):
             "optional": {
                 # Add optional parameters from BodyGenImageToText
                 "prompt": ("STRING", {"multiline": True, "default": ""}), # Optional prompt to guide captioning
-                "model_id": ("STRING", {"multiline": False, "default": ""}) # e.g., "Salesforce/blip-image-captioning-large"
+                "model_id": ("STRING", {"multiline": False, "default": "Salesforce/blip-image-captioning-large"}) # e.g., "Salesforce/blip-image-captioning-large"
             }
         }
         # Add common inputs into the 'optional' category

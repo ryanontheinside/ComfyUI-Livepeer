@@ -114,7 +114,7 @@ class LivepeerBase:
     
     def process_video_response(self, response):
         """Process video response - return URLs"""
-        return [video.url for video in response.video_response.videos]
+        return [image.url for image in response.video_response.images]
     
     def download_video(self, url, output_dir=None):
         """
@@ -180,10 +180,13 @@ class LivepeerBase:
         pil_img.save(img_byte_arr, format='PNG')
         img_byte_arr.seek(0)
         
+        # Convert BytesIO to bytes for the Livepeer API
+        img_bytes = img_byte_arr.getvalue()
+        
         # Create file-like object for the API using the correct Image class
         return Image(
             file_name="input_image.png",
-            content=img_byte_arr
+            content=img_bytes
         ) 
 
 # --- New Job Getter Node Logic ---

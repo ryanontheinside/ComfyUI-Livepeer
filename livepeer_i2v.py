@@ -42,11 +42,17 @@ class LivepeerI2V(LivepeerBase):
 
         # Prepare the input image using the base class method
         livepeer_image = self.prepare_image(image)
+        
+        # Convert the Image object to the dictionary format expected by BodyGenImageToVideo
+        image_dict = {
+            "file_name": livepeer_image.file_name,
+            "content": livepeer_image.content
+        }
 
         # Prepare arguments for the Livepeer API call using all parameters
         # Note: SDK uses BodyGenImageToVideo as the request object
         i2v_args = components.BodyGenImageToVideo(
-            image=livepeer_image,
+            image=image_dict,
             model_id=model_id if model_id else None,
             height=height,
             width=width,
