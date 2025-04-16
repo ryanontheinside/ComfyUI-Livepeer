@@ -44,7 +44,12 @@ class LivepeerT2I(LivepeerBase):
     FUNCTION = "text_to_image"
     CATEGORY = "Livepeer"
 
-    def text_to_image(self, api_key, max_retries, retry_delay, run_async, synchronous_timeout, prompt, negative_prompt="", model_id="", loras="", height=576, width=1024, guidance_scale=7.5, safety_check=True, seed=0, num_inference_steps=50, num_images_per_prompt=1):
+    def text_to_image(self, enabled, api_key, max_retries, retry_delay, run_async, synchronous_timeout, prompt, negative_prompt="", model_id="", loras="", height=576, width=1024, guidance_scale=7.5, safety_check=True, seed=0, num_inference_steps=50, num_images_per_prompt=1):
+        # Skip API call if disabled
+        if not enabled:
+            blank_image = torch.zeros((1, height, width, 3), dtype=torch.float32)
+            return (blank_image, None)
+            
         t2i_args = components.TextToImageParams(
             prompt=prompt,
             negative_prompt=negative_prompt if negative_prompt else None,

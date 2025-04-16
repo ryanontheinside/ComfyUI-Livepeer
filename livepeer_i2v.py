@@ -38,7 +38,10 @@ class LivepeerI2V(LivepeerBase):
     FUNCTION = "image_to_video"
     CATEGORY = "Livepeer"
 
-    def image_to_video(self, api_key, max_retries, retry_delay, run_async, synchronous_timeout, image, model_id="", height=576, width=1024, fps=6, motion_bucket_id=127, noise_aug_strength=0.02, safety_check=True, seed=0, num_inference_steps=25, download_video=True):
+    def image_to_video(self, enabled, api_key, max_retries, retry_delay, run_async, synchronous_timeout, image, model_id="", height=576, width=1024, fps=6, motion_bucket_id=127, noise_aug_strength=0.02, safety_check=True, seed=0, num_inference_steps=25, download_video=True):
+        # Skip API call if disabled
+        if not enabled:
+            return (None, None, None)
 
         # Prepare the input image using the base class method
         livepeer_image = self.prepare_image(image)

@@ -27,6 +27,7 @@ class LivepeerBase:
     def get_common_inputs(cls):
         """Common input parameters for all Livepeer nodes"""
         return {
+            "enabled": ("BOOLEAN", {"default": True, "tooltip": "When disabled, API calls will be skipped"}),
             "api_key": ("STRING", {"default": "17101937-98f4-4c99-bdb2-e6499fda7ef8"}),
             "max_retries": ("INT", {"default": 3, "min": 1, "max": 10}),
             "retry_delay": ("FLOAT", {"default": 2.0, "min": 0.5, "max": 10.0}),

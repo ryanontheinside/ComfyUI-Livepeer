@@ -32,7 +32,10 @@ class LivepeerI2T(LivepeerBase):
     FUNCTION = "image_to_text"
     CATEGORY = "Livepeer"
 
-    def image_to_text(self, api_key, max_retries, retry_delay, run_async, synchronous_timeout, image, prompt="", model_id=""):
+    def image_to_text(self, enabled, api_key, max_retries, retry_delay, run_async, synchronous_timeout, image, prompt="", model_id=""):
+        # Skip API call if disabled
+        if not enabled:
+            return ("", None)
 
         # Prepare the input image using the base class method
         livepeer_image = self.prepare_image(image)

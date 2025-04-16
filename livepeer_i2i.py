@@ -39,7 +39,10 @@ class LivepeerI2I(LivepeerBase):
     FUNCTION = "image_to_image"
     CATEGORY = "Livepeer"
 
-    def image_to_image(self, api_key, max_retries, retry_delay, run_async, synchronous_timeout, image, prompt, negative_prompt="", model_id="", loras="", strength=0.8, guidance_scale=7.5, image_guidance_scale=1.5, safety_check=True, seed=0, num_inference_steps=100, num_images_per_prompt=1):
+    def image_to_image(self, enabled, api_key, max_retries, retry_delay, run_async, synchronous_timeout, image, prompt, negative_prompt="", model_id="", loras="", strength=0.8, guidance_scale=7.5, image_guidance_scale=1.5, safety_check=True, seed=0, num_inference_steps=100, num_images_per_prompt=1):
+        # Skip API call if disabled
+        if not enabled:
+            return (image, None)
 
         # Prepare the input image using the base class method
         livepeer_image = self.prepare_image(image)

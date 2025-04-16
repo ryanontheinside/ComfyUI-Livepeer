@@ -34,7 +34,10 @@ class LivepeerUpscale(LivepeerBase):
     FUNCTION = "upscale_image"
     CATEGORY = "Livepeer"
 
-    def upscale_image(self, api_key, max_retries, retry_delay, run_async, synchronous_timeout, image, prompt, model_id="", safety_check=True, seed=0, num_inference_steps=75):
+    def upscale_image(self, enabled, api_key, max_retries, retry_delay, run_async, synchronous_timeout, image, prompt, model_id="", safety_check=True, seed=0, num_inference_steps=75):
+        # Skip API call if disabled
+        if not enabled:
+            return (image, None)
 
         # Prepare the input image using the base class method
         livepeer_image = self.prepare_image(image)
