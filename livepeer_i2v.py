@@ -33,12 +33,12 @@ class LivepeerI2V(LivepeerBase):
         node_inputs["optional"].update(common_inputs)
         return node_inputs
 
-    RETURN_TYPES = ("STRING", "STRING", "STRING") # Video URL, file path, job_id
+    RETURN_TYPES = ("STRING", "STRING", "video_job") # Use specific type "video_job"
     RETURN_NAMES = ("video_url", "video_path", "job_id")
     FUNCTION = "image_to_video"
     CATEGORY = "Livepeer"
 
-    def image_to_video(self, api_key, max_retries, retry_delay, run_async, image, model_id="", height=576, width=1024, fps=6, motion_bucket_id=127, noise_aug_strength=0.02, safety_check=True, seed=0, num_inference_steps=25, download_video=True):
+    def image_to_video(self, api_key, max_retries, retry_delay, run_async, synchronous_timeout, image, model_id="", height=576, width=1024, fps=6, motion_bucket_id=127, noise_aug_strength=0.02, safety_check=True, seed=0, num_inference_steps=25, download_video=True):
 
         # Prepare the input image using the base class method
         livepeer_image = self.prepare_image(image)
@@ -76,7 +76,7 @@ class LivepeerI2V(LivepeerBase):
             return (None, None, job_id)
         else:
             # Execute synchronously with retry logic
-            response = self.execute_with_retry(api_key, max_retries, retry_delay, operation_func)
+            response = self.execute_with_retry(api_key, max_retries, retry_delay, operation_func, synchronous_timeout=synchronous_timeout)
 
             # Process the response to get video URLs
             video_urls = self.process_video_response(response)

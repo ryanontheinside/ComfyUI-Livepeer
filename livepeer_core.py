@@ -11,6 +11,9 @@ import uuid
 import traceback # Added for better error logging in threads
 import os
 import shutil
+import sys
+
+import comfy.model_management
 
 # Global store for async job status and results
 # Structure: {job_id: {'status': 'pending'/'completed'/'failed', 'result': ..., 'error': ..., 'type': 't2i'/'i2i'/...}}
@@ -28,6 +31,7 @@ class LivepeerBase:
             "max_retries": ("INT", {"default": 3, "min": 1, "max": 10}),
             "retry_delay": ("FLOAT", {"default": 2.0, "min": 0.5, "max": 10.0}),
             "run_async": ("BOOLEAN", {"default": False}), # Add async toggle
+            "synchronous_timeout": ("FLOAT", {"default": 120.0, "min": 5.0, "max": 600.0, "tooltip": "Timeout for synchronous operations (per retry). For async operations, this is ignored."}), # Timeout for sync mode
         }
     
     def _execute_livepeer_operation(self, api_key, max_retries, retry_delay, operation_func, job_id, job_type):
@@ -44,7 +48,8 @@ class LivepeerBase:
             print(f"Livepeer Async Job {job_id} ({job_type}): Execution successful.")
             with _job_store_lock:
                 # Set intermediate status indicating completion but pending delivery by getter node
-                _livepeer_job_store[job_id].update({'status': 'completed_pending_delivery', 'result': result})
+                if job_id in _livepeer_job_store: # Check if job wasn't cancelled/removed
+                    _livepeer_job_store[job_id].update({'status': 'completed_pending_delivery', 'result': result})
         except Exception as e:
             print(f"Livepeer Async Job {job_id} ({job_type}): Execution failed.")
             traceback.print_exc() # Print full traceback for debugging
@@ -70,30 +75,137 @@ class LivepeerBase:
         thread.start()
         return job_id
 
-    def execute_with_retry(self, api_key, max_retries, retry_delay, operation_func):
-        """Execute a Livepeer API operation with retry logic"""
+    # Helper for synchronous execution thread
+    def _run_operation_thread(self, api_key, operation_func, result_container):
+        """Executes the actual Livepeer SDK call in a separate thread."""
+        try:
+            # Check for interruption before starting
+            if comfy.model_management.processing_interrupted():
+                result_container['error'] = comfy.model_management.InterruptProcessingException("Operation cancelled")
+                return
+                
+            # Create Livepeer instance within the thread
+            with Livepeer(http_bearer=api_key) as livepeer:
+                result = operation_func(livepeer)
+            result_container['result'] = result
+        except Exception as e:
+            result_container['error'] = e
+        finally:
+            # Signal completion regardless of outcome
+            result_container['done'] = True
+
+    def execute_with_retry(self, api_key, max_retries, retry_delay, operation_func, synchronous_timeout=120.0):
+        """
+        Execute a Livepeer API operation with retry logic.
+        Uses non-blocking polling for UI responsiveness and cancellation.
+        Applies timeout to each attempt.
+        Checks ComfyUI's interrupt flag directly for proper cancellation.
+        """
         attempts = 0
         last_error = None
-        
+        current_retry_delay = float(retry_delay) # Ensure it's float
+
+        # Helper function to check if processing should be interrupted
+        def check_interrupt():
+            # Check ComfyUI's global interrupt flag
+            if comfy.model_management.processing_interrupted():
+                raise comfy.model_management.InterruptProcessingException("Operation cancelled by user")
+
         while attempts < max_retries:
-            try:
-                with Livepeer(http_bearer=api_key) as livepeer:
-                    result = operation_func(livepeer)
-                return result
-            except Exception as e:
-                attempts += 1
-                last_error = e
-                print(f"Livepeer API attempt {attempts} failed: {str(e)}")
+            # Check for interruption at the start of each attempt
+            check_interrupt()
+            
+            print(f"Livepeer Attempt {attempts + 1}/{max_retries}")
+            result_container = {'result': None, 'error': None, 'done': False}
+            
+            thread = threading.Thread(
+                target=self._run_operation_thread,
+                args=(api_key, operation_func, result_container),
+                daemon=True 
+            )
+            thread.start()
+
+            start_time = time.time()
+            timed_out = False
+            
+            # Polling loop - yields control to ComfyUI
+            while not result_container['done']:
+                # Check for interruption regularly
+                try:
+                    check_interrupt()
+                except comfy.model_management.InterruptProcessingException:
+                    # Mark the thread for termination
+                    timed_out = True
+                    last_error = comfy.model_management.InterruptProcessingException("Operation cancelled by user")
+                    print("Livepeer operation cancelled by user.")
+                    # Don't wait for thread to complete - allow ComfyUI to cancel
+                    break
                 
-                if attempts < max_retries:
-                    print(f"Retrying in {retry_delay} seconds...")
-                    time.sleep(retry_delay)
-                    # Exponential backoff
-                    retry_delay *= 1.5
-        
-        # If all retries failed
-        raise RuntimeError(f"Failed after {max_retries} attempts. Last error: {str(last_error)}")
-    
+                # Check for timeout
+                if time.time() - start_time > synchronous_timeout:
+                    timed_out = True
+                    print(f"Livepeer Attempt {attempts + 1} timed out after {synchronous_timeout} seconds.")
+                    # We don't kill the thread, just stop waiting for it in this attempt
+                    break 
+                
+                # Yield control to allow UI updates and cancellation checks
+                time.sleep(0.1) 
+
+            # Check one more time after polling loop ends
+            try:
+                check_interrupt()
+            except comfy.model_management.InterruptProcessingException:
+                if not timed_out:  # Only set if not already set
+                    timed_out = True
+                    last_error = comfy.model_management.InterruptProcessingException("Operation cancelled by user")
+                    print("Livepeer operation cancelled by user.")
+
+            # Handle result
+            if not timed_out and result_container['done']:
+                thread.join(timeout=1.0) # Short timeout for join after done flag is set
+
+            # Process result/error from this attempt
+            if timed_out and isinstance(last_error, comfy.model_management.InterruptProcessingException):
+                # If the interruption was requested by user, propagate the exception immediately
+                raise last_error
+            elif timed_out:
+                last_error = TimeoutError(f"Operation timed out after {synchronous_timeout} seconds")
+                attempts += 1 # Count timeout as a failed attempt
+            elif result_container['error']:
+                attempts += 1
+                last_error = result_container['error']
+                print(f"Livepeer Attempt {attempts} failed: {str(last_error)}")
+            elif 'result' in result_container and result_container['result'] is not None:
+                 print(f"Livepeer Attempt {attempts + 1} successful.")
+                 return result_container['result'] # Success! Exit the function.
+            else: # Should not happen if done is True and no error, but handle defensively
+                 attempts += 1
+                 last_error = RuntimeError("Unknown error: Operation thread finished but provided no result or error.")
+                 print(f"Livepeer Attempt {attempts} failed with unknown error.")
+
+            # One final cancellation check before considering retry
+            check_interrupt()
+
+            # If attempt failed (error or timeout) and more retries left:
+            if attempts < max_retries:
+                print(f"Retrying in {current_retry_delay} seconds...")
+                # Use polling sleep for retry delay to remain responsive
+                delay_start_time = time.time()
+                while time.time() - delay_start_time < current_retry_delay:
+                    # Check for interruption during retry delay
+                    try:
+                        check_interrupt()
+                    except comfy.model_management.InterruptProcessingException:
+                        # Propagate the interruption immediately
+                        raise
+                        
+                    # Yield control during retry delay sleep
+                    time.sleep(0.1) 
+                current_retry_delay *= 1.5 # Exponential backoff
+            
+        # If loop finishes, all retries failed
+        raise RuntimeError(f"Operation failed after {max_retries} attempts. Last error: {str(last_error)}")
+
     def process_image_response(self, response):
         """Process image response into BHWC tensor format"""
         images = []
@@ -189,164 +301,8 @@ class LivepeerBase:
             content=img_bytes
         ) 
 
-# --- New Job Getter Node Logic ---
+# --- Old Job Getter Node Logic Removed ---
+# The LivepeerJobGetter class has been moved and refactored into
+# livepeer_jobgetter.py with a base class and specific implementations.
 
-class LivepeerJobGetter:
-    # Added BOOLEAN output for readiness status
-    RETURN_TYPES = ("IMAGE", "STRING", "STRING", "STRING", "BOOLEAN", "STRING") 
-    RETURN_NAMES = ("image_output", "video_urls_output", "job_status", "error_message", "image_ready", "video_path")
-    FUNCTION = "get_job_result"
-    CATEGORY = "Livepeer"
-
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                 "job_id": ("STRING", {"multiline": False, "default": ""}),
-             },
-            "optional": {
-                 "download_video": ("BOOLEAN", {"default": True}),
-             }
-        }
-
-    @classmethod
-    def IS_CHANGED(s, job_id):
-        global _livepeer_job_store, _job_store_lock
-        with _job_store_lock:
-            job_info = _livepeer_job_store.get(job_id)
-            current_status = job_info.get('status', 'not_found') if job_info else 'not_found'
-
-            # For terminal states, return a stable tuple
-            if current_status in ['delivered', 'failed']:
-                return (job_id, current_status)
-            # For non-terminal states (including the new intermediate one), return changing tuple
-            else:
-                return (job_id, current_status, time.time())
-
-    def get_job_result(self, job_id, download_video=True):
-        global _livepeer_job_store, _job_store_lock
-
-        blank_height = 64
-        blank_width = 64
-        blank_image = torch.zeros((1, blank_height, blank_width, 3), dtype=torch.float32)
-
-        # --- Check current status --- 
-        with _job_store_lock:
-            job_info = _livepeer_job_store.get(job_id)
-            if not job_info:
-                print(f"Livepeer Job Getter: Job {job_id} not found in store yet.")
-                return (blank_image, None, "not_found", f"Job ID {job_id} not found in store.", False, None)
-            
-            status = job_info.get('status')
-            job_type = job_info.get('type')
-            # Make a copy to avoid modifying the store directly unless intended
-            job_info_copy = job_info.copy()
-
-        # --- Handle Based on Status --- 
-
-        # If completed and pending delivery, process, output, store result, and mark as delivered
-        if status == 'completed_pending_delivery':
-            print(f"Livepeer Job Getter: Job {job_id} completed. Processing and delivering result.")
-            result = job_info_copy.get('result') # Use copy here
-            base_processor = LivepeerBase()
-            image_out, video_urls_out, error_out, video_path = None, None, None, None
-            image_ready = False
-
-            try:
-                # --- Result Processing --- 
-                if job_type in ['t2i', 'i2i', 'upscale']:
-                    if hasattr(result, 'image_response') and result.image_response:
-                        image_out = base_processor.process_image_response(result)
-                        image_ready = image_out is not None
-                    else: error_out = f"Completed job {job_id} ({job_type}) has no image_response."
-                elif job_type == 'i2v':
-                    if hasattr(result, 'video_response') and result.video_response:
-                        processed_urls = base_processor.process_video_response(result)
-                        video_urls_out = processed_urls[0] if processed_urls else None
-                        image_ready = bool(video_urls_out)
-                        
-                        # Download video if requested
-                        if download_video and video_urls_out:
-                            try:
-                                video_path = base_processor.download_video(video_urls_out)
-                                print(f"Downloaded video to {video_path}")
-                            except Exception as e:
-                                print(f"Error downloading video: {e}")
-                                video_path = f"Error: {str(e)}"
-                    else: error_out = f"Completed job {job_id} ({job_type}) has no video_response."
-                elif job_type == 'i2t':
-                    text_result = None
-                    if hasattr(result, 'text_response'): text_result = str(result.text_response)
-                    elif hasattr(result, 'text'): text_result = str(result.text)
-                    elif isinstance(result, str): text_result = result
-                    if text_result is not None: video_urls_out = text_result; image_ready = True
-                    else: error_out = f"Completed job {job_id} ({job_type}) lacks expected text field."
-                else: error_out = f"Unknown job type '{job_type}' for job {job_id}"
-                # --- End Result Processing --- 
-
-                if error_out:
-                    print(f"Livepeer Job Getter: Error processing result for {job_id}: {error_out}")
-                    return (blank_image, video_urls_out, "processing_error", error_out, False, None)
-                else:
-                    final_image_out = image_out if image_ready and image_out is not None else blank_image
-                    print(f"Livepeer Job Getter: Job {job_id} processed successfully. Storing result and marking as delivered.")
-                    # --- Store Processed Result & Mark as Delivered --- 
-                    with _job_store_lock:
-                        if job_id in _livepeer_job_store:
-                             # Store the processed outputs for future retrieval
-                            _livepeer_job_store[job_id]['processed_image'] = final_image_out 
-                            _livepeer_job_store[job_id]['processed_urls'] = video_urls_out
-                            _livepeer_job_store[job_id]['video_path'] = video_path
-                            _livepeer_job_store[job_id]['status'] = 'delivered'
-                    # --- Return Processed Results --- 
-                    return (final_image_out, video_urls_out, 'delivered', None, image_ready, video_path)
-
-            except Exception as e:
-                print(f"Livepeer Job Getter: Exception processing result for job {job_id}: {e}")
-                traceback.print_exc()
-                return (blank_image, None, "processing_error", f"Exception processing result: {str(e)}", False, None)
-
-        # If pending, just report status and return placeholders
-        elif status == 'pending':
-            print(f"Livepeer Job Getter: Job {job_id} is still pending.")
-            return (blank_image, None, status, "Job is pending.", False, None)
-        
-        # If already delivered, retrieve and return the STORED results
-        elif status == 'delivered':
-             print(f"Livepeer Job Getter: Job {job_id} already delivered. Returning stored result.")
-             # Retrieve stored processed results
-             stored_image = job_info_copy.get('processed_image', blank_image) # Use blank as default if missing
-             stored_urls = job_info_copy.get('processed_urls', None)
-             stored_video_path = job_info_copy.get('video_path', None)
-             
-             # If video path not available but URL is, and download is requested, try to download now
-             if stored_video_path is None and stored_urls and download_video:
-                 try:
-                     base_processor = LivepeerBase()
-                     stored_video_path = base_processor.download_video(stored_urls)
-                     # Update the stored video path
-                     with _job_store_lock:
-                         if job_id in _livepeer_job_store:
-                             _livepeer_job_store[job_id]['video_path'] = stored_video_path
-                 except Exception as e:
-                     print(f"Error downloading video: {e}")
-                     stored_video_path = f"Error: {str(e)}"
-             
-             # Determine readiness based on stored data (primarily if image exists beyond blank)
-             is_stored_image_valid = stored_image is not None and stored_image.shape[1] > blank_height # Check if not the default blank
-             stored_ready = is_stored_image_valid or bool(stored_urls)
-             return (stored_image, stored_urls, status, "Results previously delivered.", stored_ready, stored_video_path)
-
-        # If failed, return placeholders and 'failed' status
-        elif status == 'failed':
-            error_msg = job_info_copy.get('error', 'Unknown error')
-            print(f"Livepeer Job Getter: Job {job_id} failed: {error_msg}")
-            return (blank_image, None, status, error_msg, False, None)
-
-        # Handle any other unknown status (like processing_error)
-        else:
-            print(f"Livepeer Job Getter: Job {job_id} has status: {status}")
-            error_msg = job_info_copy.get('error', f"Unknown status '{status}'") 
-            return (blank_image, None, status, error_msg, False, None)
-
-# Note: Need to register LivepeerJobGetter in __init__.py 
+# --- End Removed Logic --- 

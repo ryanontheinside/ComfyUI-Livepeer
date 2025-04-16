@@ -27,12 +27,12 @@ class LivepeerI2T(LivepeerBase):
         return node_inputs
 
     # Output text and job_id
-    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_TYPES = ("STRING", "text_job")
     RETURN_NAMES = ("text", "job_id")
     FUNCTION = "image_to_text"
     CATEGORY = "Livepeer"
 
-    def image_to_text(self, api_key, max_retries, retry_delay, run_async, image, prompt="", model_id=""):
+    def image_to_text(self, api_key, max_retries, retry_delay, run_async, synchronous_timeout, image, prompt="", model_id=""):
 
         # Prepare the input image using the base class method
         livepeer_image = self.prepare_image(image)
@@ -58,7 +58,7 @@ class LivepeerI2T(LivepeerBase):
         else:
             # Execute synchronously with retry logic
             try:
-                response = self.execute_with_retry(api_key, max_retries, retry_delay, operation_func)
+                response = self.execute_with_retry(api_key, max_retries, retry_delay, operation_func, synchronous_timeout=synchronous_timeout)
 
                 # Process the response to get the text string
                 text_result = ""

@@ -33,18 +33,18 @@ class LivepeerT2I(LivepeerBase):
                 "num_images_per_prompt": ("INT", {"default": 1, "min": 1, "max": 4, "step": 1}),
             }
         }
-        # Add common inputs into the 'optional' category
+        # Add common inputs into the 'optional' category, including the new timeout
         if "optional" not in node_inputs:
             node_inputs["optional"] = {}
         node_inputs["optional"].update(common_inputs)
         return node_inputs
 
-    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_TYPES = ("IMAGE", "image_job")
     RETURN_NAMES = ("image", "job_id")
     FUNCTION = "text_to_image"
     CATEGORY = "Livepeer"
 
-    def text_to_image(self, api_key, max_retries, retry_delay, run_async, prompt, negative_prompt="", model_id="", loras="", height=576, width=1024, guidance_scale=7.5, safety_check=True, seed=0, num_inference_steps=50, num_images_per_prompt=1):
+    def text_to_image(self, api_key, max_retries, retry_delay, run_async, synchronous_timeout, prompt, negative_prompt="", model_id="", loras="", height=576, width=1024, guidance_scale=7.5, safety_check=True, seed=0, num_inference_steps=50, num_images_per_prompt=1):
         t2i_args = components.TextToImageParams(
             prompt=prompt,
             negative_prompt=negative_prompt if negative_prompt else None,
@@ -64,12 +64,14 @@ class LivepeerT2I(LivepeerBase):
             return livepeer.generate.text_to_image(request=t2i_args)
 
         if run_async:
+            # Pass synchronous_timeout to trigger_async_job as well
             job_id = self.trigger_async_job(api_key, max_retries, retry_delay, operation_func, self.JOB_TYPE)
             # Create a blank image with the requested dimensions
             blank_image = torch.zeros((1, height, width, 3), dtype=torch.float32)
             return (blank_image, job_id)
         else:
-            response = self.execute_with_retry(api_key, max_retries, retry_delay, operation_func)
+            # Pass synchronous_timeout to execute_with_retry for synchronous calls
+            response = self.execute_with_retry(api_key, max_retries, retry_delay, operation_func, synchronous_timeout=synchronous_timeout)
             image_tensor = self.process_image_response(response)
             return (image_tensor, None)
 

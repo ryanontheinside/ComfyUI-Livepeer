@@ -29,12 +29,12 @@ class LivepeerUpscale(LivepeerBase):
         node_inputs["optional"].update(common_inputs)
         return node_inputs
 
-    RETURN_TYPES = ("IMAGE", "STRING") # IMAGE for sync, STRING (job_id) for async
+    RETURN_TYPES = ("IMAGE", "image_job") # Use specific type "image_job"
     RETURN_NAMES = ("upscaled_image", "job_id")
     FUNCTION = "upscale_image"
     CATEGORY = "Livepeer"
 
-    def upscale_image(self, api_key, max_retries, retry_delay, run_async, image, prompt, model_id="", safety_check=True, seed=0, num_inference_steps=75):
+    def upscale_image(self, api_key, max_retries, retry_delay, run_async, synchronous_timeout, image, prompt, model_id="", safety_check=True, seed=0, num_inference_steps=75):
 
         # Prepare the input image using the base class method
         livepeer_image = self.prepare_image(image)
@@ -63,7 +63,7 @@ class LivepeerUpscale(LivepeerBase):
         else:
             # Execute synchronously with retry logic
             try:
-                response = self.execute_with_retry(api_key, max_retries, retry_delay, operation_func)
+                response = self.execute_with_retry(api_key, max_retries, retry_delay, operation_func, synchronous_timeout=synchronous_timeout)
 
                 # Process the response to get the image tensor
                 # Assume response structure is similar to t2i/i2i
