@@ -17,7 +17,7 @@ class LivepeerI2I(LivepeerBase):
             },
             "optional": {
                 "negative_prompt": ("STRING", {"multiline": True, "default": ""}),
-                "model_id": ("STRING", {"multiline": False, "default": ""}), # e.g., "stabilityai/stable-diffusion-2-1"
+                "model_id": ("STRING", {"multiline": False, "default": "timbrooks/instruct-pix2pix"}),
                 "loras": ("STRING", {"multiline": True, "default": ""}),
                 "strength": ("FLOAT", {"default": 0.8, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "guidance_scale": ("FLOAT", {"default": 7.5, "min": 0.0, "max": 20.0, "step": 0.1}),

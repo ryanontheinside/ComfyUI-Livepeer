@@ -15,7 +15,7 @@ class LivepeerI2V(LivepeerBase):
                 "image": ("IMAGE", ),
             },
             "optional": {
-                 "model_id": ("STRING", {"multiline": False, "default": ""}), # e.g., stabilityai/stable-video-diffusion-img2vid-xt
+                 "model_id": ("STRING", {"multiline": False, "default": "stabilityai/stable-video-diffusion-img2vid-xt-1-1"}), # e.g., stabilityai/stable-video-diffusion-img2vid-xt
                  "height": ("INT", {"default": 576, "min": 64, "max": 2048, "step": 64}),
                  "width": ("INT", {"default": 1024, "min": 64, "max": 2048, "step": 64}),
                  "fps": ("INT", {"default": 6, "min": 1, "max": 60, "step": 1}),
@@ -24,6 +24,7 @@ class LivepeerI2V(LivepeerBase):
                  "safety_check": ("BOOLEAN", {"default": True}),
                  "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}), # Use 0 for None/random
                  "num_inference_steps": ("INT", {"default": 25, "min": 1, "max": 100, "step": 1}),
+                 "download_video": ("BOOLEAN", {"default": True}), # New option to download video
              }
         }
         # Add common inputs into the 'optional' category
@@ -32,12 +33,12 @@ class LivepeerI2V(LivepeerBase):
         node_inputs["optional"].update(common_inputs)
         return node_inputs
 
-    RETURN_TYPES = ("STRING", "STRING") # Video URLs (newline separated) for sync, STRING (job_id) for async
-    RETURN_NAMES = ("video_urls", "job_id")
+    RETURN_TYPES = ("STRING", "STRING", "STRING") # Video URL, file path, job_id
+    RETURN_NAMES = ("video_url", "video_path", "job_id")
     FUNCTION = "image_to_video"
     CATEGORY = "Livepeer"
 
-    def image_to_video(self, api_key, max_retries, retry_delay, run_async, image, model_id="", height=576, width=1024, fps=6, motion_bucket_id=127, noise_aug_strength=0.02, safety_check=True, seed=0, num_inference_steps=25):
+    def image_to_video(self, api_key, max_retries, retry_delay, run_async, image, model_id="", height=576, width=1024, fps=6, motion_bucket_id=127, noise_aug_strength=0.02, safety_check=True, seed=0, num_inference_steps=25, download_video=True):
 
         # Prepare the input image using the base class method
         livepeer_image = self.prepare_image(image)
@@ -65,17 +66,27 @@ class LivepeerI2V(LivepeerBase):
         if run_async:
             # Trigger async job and return job ID
             job_id = self.trigger_async_job(api_key, max_retries, retry_delay, operation_func, self.JOB_TYPE)
-            # Return None for video_urls, job_id for the string output
-            return (None, job_id)
+            # Return None for video_url, None for video_path, job_id for the string output
+            return (None, None, job_id)
         else:
             # Execute synchronously with retry logic
             response = self.execute_with_retry(api_key, max_retries, retry_delay, operation_func)
 
             # Process the response to get video URLs
             video_urls = self.process_video_response(response)
-            video_urls_str = "\n".join(video_urls) if video_urls else ""
-            # Return video URLs string, None for job_id
-            return (video_urls_str, None)
+            video_url = video_urls[0] if video_urls else ""
+            
+            # Download video if requested
+            video_path = None
+            if download_video and video_url:
+                try:
+                    video_path = self.download_video(video_url)
+                except Exception as e:
+                    print(f"Error downloading video: {e}")
+                    video_path = f"Error: {str(e)}"
+            
+            # Return video URL, video_path, None for job_id
+            return (video_url, video_path, None)
 
 NODE_CLASS_MAPPINGS = {
     "LivepeerI2V": LivepeerI2V,

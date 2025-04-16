@@ -9,6 +9,8 @@ from livepeer_ai.models.components import Image
 import threading
 import uuid
 import traceback # Added for better error logging in threads
+import os
+import shutil
 
 # Global store for async job status and results
 # Structure: {job_id: {'status': 'pending'/'completed'/'failed', 'result': ..., 'error': ..., 'type': 't2i'/'i2i'/...}}
@@ -41,7 +43,8 @@ class LivepeerBase:
             result = self.execute_with_retry(api_key, max_retries, retry_delay, operation_func)
             print(f"Livepeer Async Job {job_id} ({job_type}): Execution successful.")
             with _job_store_lock:
-                _livepeer_job_store[job_id].update({'status': 'completed', 'result': result})
+                # Set intermediate status indicating completion but pending delivery by getter node
+                _livepeer_job_store[job_id].update({'status': 'completed_pending_delivery', 'result': result})
         except Exception as e:
             print(f"Livepeer Async Job {job_id} ({job_type}): Execution failed.")
             traceback.print_exc() # Print full traceback for debugging
@@ -113,6 +116,41 @@ class LivepeerBase:
         """Process video response - return URLs"""
         return [video.url for video in response.video_response.videos]
     
+    def download_video(self, url, output_dir=None):
+        """
+        Download video from URL to ComfyUI output directory
+        
+        Args:
+            url: Video URL to download
+            output_dir: Custom output directory (defaults to ComfyUI output)
+            
+        Returns:
+            str: Full path to downloaded video file
+        """
+        # Determine ComfyUI output directory if not specified
+        if output_dir is None:
+            # Default ComfyUI output is in the 'output' folder at the project root
+            output_dir = os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')), 'output')
+            # Ensure 'livepeer' subfolder exists
+            output_dir = os.path.join(output_dir, 'livepeer')
+            os.makedirs(output_dir, exist_ok=True)
+        
+        # Generate unique filename using timestamp
+        import time
+        timestamp = int(time.time())
+        video_filename = f"livepeer_video_{timestamp}.mp4"
+        video_path = os.path.join(output_dir, video_filename)
+        
+        # Download the video
+        print(f"Downloading video from {url} to {video_path}")
+        response = requests.get(url, stream=True)
+        response.raise_for_status()
+        
+        with open(video_path, 'wb') as f:
+            shutil.copyfileobj(response.raw, f)
+            
+        return video_path
+    
     def prepare_image(self, image_batch):
         """
         Convert ComfyUI image tensor batch to file for API upload
@@ -128,7 +166,6 @@ class LivepeerBase:
             batch processing for image inputs
         """
         # For now, we can only process one image at a time with the Livepeer API
-        # This is a limitation in the API, not our code
         # Future API versions might support batch processing
         if image_batch.shape[0] > 1:
             print(f"Warning: Livepeer API only supports one image at a time. Using first image from batch of {image_batch.shape[0]}")
@@ -152,8 +189,9 @@ class LivepeerBase:
 # --- New Job Getter Node Logic ---
 
 class LivepeerJobGetter:
-    RETURN_TYPES = ("IMAGE", "STRING", "STRING", "STRING") # Output image, video urls (as string), job_status, error_message
-    RETURN_NAMES = ("image_output", "video_urls_output", "job_status", "error_message")
+    # Added BOOLEAN output for readiness status
+    RETURN_TYPES = ("IMAGE", "STRING", "STRING", "STRING", "BOOLEAN", "STRING") 
+    RETURN_NAMES = ("image_output", "video_urls_output", "job_status", "error_message", "image_ready", "video_path")
     FUNCTION = "get_job_result"
     CATEGORY = "Livepeer"
 
@@ -162,101 +200,150 @@ class LivepeerJobGetter:
         return {
             "required": {
                  "job_id": ("STRING", {"multiline": False, "default": ""}),
-                 "poll_interval": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 10.0, "step": 0.1, "round": 0.1}), # How often to check status if pending
-                 "timeout": ("FLOAT", {"default": 60.0, "min": 0.0, "max": 600.0, "step": 1.0}), # Max time to wait
              },
-             "optional": {
-                 "previous_status": ("STRING", {"forceInput": True, "default": ""}) # To help trigger re-evaluation
+            "optional": {
+                 "download_video": ("BOOLEAN", {"default": True}),
              }
         }
 
-    def get_job_result(self, job_id, poll_interval, timeout, previous_status=None):
+    @classmethod
+    def IS_CHANGED(s, job_id):
         global _livepeer_job_store, _job_store_lock
-        start_time = time.time()
+        with _job_store_lock:
+            job_info = _livepeer_job_store.get(job_id)
+            current_status = job_info.get('status', 'not_found') if job_info else 'not_found'
 
-        while True:
-            with _job_store_lock:
-                job_info = _livepeer_job_store.get(job_id)
-
-            if not job_info:
-                return (None, None, f"not_found", f"Job ID {job_id} not found in store.")
-
-            status = job_info.get('status')
-            job_type = job_info.get('type') # Get the job type
-
-            if status == 'completed':
-                print(f"Livepeer Job Getter: Job {job_id} completed.")
-                result = job_info.get('result')
-                # Process result based on job type - reusing base class methods
-                base_processor = LivepeerBase() # Instantiate base to access processing methods
-                image_out = None
-                video_urls_out = None
-                error_out = None
-
-                try:
-                    if job_type in ['t2i', 'i2i', 'upscale']:
-                         if hasattr(result, 'image_response') and result.image_response:
-                             image_out = base_processor.process_image_response(result)
-                         else:
-                              error_out = f"Completed job {job_id} ({job_type}) has no image_response."
-                    elif job_type == 'i2v':
-                         if hasattr(result, 'video_response') and result.video_response:
-                            video_urls_out = "\n".join(base_processor.process_video_response(result))
-                         else:
-                             error_out = f"Completed job {job_id} ({job_type}) has no video_response."
-                    elif job_type == 'i2t':
-                         # Assuming i2t returns text directly or in a specific field
-                         # Adjust based on actual i2t response structure
-                         if hasattr(result, 'text_response'): # Example field
-                             video_urls_out = str(result.text_response)
-                         elif hasattr(result, 'text'): # Common alternative
-                              video_urls_out = str(result.text)
-                         elif isinstance(result, str): # If the result *is* the string
-                             video_urls_out = result
-                         else:
-                             error_out = f"Completed job {job_id} ({job_type}) lacks expected text field (e.g., text_response, text)."
-                    else:
-                         error_out = f"Unknown job type '{job_type}' for job {job_id}"
-
-                    # Check for processing errors before returning
-                    if error_out:
-                         print(f"Livepeer Job Getter: Error processing result for {job_id}: {error_out}")
-                         # Return error status even if original job completed
-                         return (None, None, "processing_error", error_out)
-                    else:
-                         # Optionally remove completed job from store to prevent memory leak
-                         # with _job_store_lock:
-                         #     if job_id in _livepeer_job_store: del _livepeer_job_store[job_id]
-                         print(f"Livepeer Job Getter: Job {job_id} processed successfully.")
-                         return (image_out, video_urls_out, status, None)
-
-                except Exception as e:
-                     # Catch errors during the result processing itself
-                     print(f"Livepeer Job Getter: Exception processing result for job {job_id}: {e}")
-                     traceback.print_exc()
-                     return (None, None, "processing_error", f"Exception processing result: {str(e)}")
-
-
-            elif status == 'failed':
-                error_msg = job_info.get('error', 'Unknown error')
-                print(f"Livepeer Job Getter: Job {job_id} failed: {error_msg}")
-                # Optionally remove failed job from store
-                # with _job_store_lock:
-                #     del _livepeer_job_store[job_id]
-                return (None, None, status, error_msg)
-
-            elif status == 'pending':
-                if time.time() - start_time > timeout:
-                     print(f"Livepeer Job Getter: Job {job_id} timed out after {timeout} seconds.")
-                     return (None, None, "timeout", f"Job timed out after {timeout}s.")
-
-                # Wait before checking again
-                print(f"Livepeer Job Getter: Job {job_id} is pending. Checking again in {poll_interval}s.")
-                time.sleep(poll_interval)
-                # Continue loop
-
+            # For terminal states, return a stable tuple
+            if current_status in ['delivered', 'failed']:
+                return (job_id, current_status)
+            # For non-terminal states (including the new intermediate one), return changing tuple
             else:
-                # Should not happen
-                return (None, None, "unknown_status", f"Unknown status '{status}' for job {job_id}.")
+                return (job_id, current_status, time.time())
+
+    def get_job_result(self, job_id, download_video=True):
+        global _livepeer_job_store, _job_store_lock
+
+        blank_height = 64
+        blank_width = 64
+        blank_image = torch.zeros((1, blank_height, blank_width, 3), dtype=torch.float32)
+
+        # --- Check current status --- 
+        with _job_store_lock:
+            job_info = _livepeer_job_store.get(job_id)
+            if not job_info:
+                print(f"Livepeer Job Getter: Job {job_id} not found in store yet.")
+                return (blank_image, None, "not_found", f"Job ID {job_id} not found in store.", False, None)
+            
+            status = job_info.get('status')
+            job_type = job_info.get('type')
+            # Make a copy to avoid modifying the store directly unless intended
+            job_info_copy = job_info.copy()
+
+        # --- Handle Based on Status --- 
+
+        # If completed and pending delivery, process, output, store result, and mark as delivered
+        if status == 'completed_pending_delivery':
+            print(f"Livepeer Job Getter: Job {job_id} completed. Processing and delivering result.")
+            result = job_info_copy.get('result') # Use copy here
+            base_processor = LivepeerBase()
+            image_out, video_urls_out, error_out, video_path = None, None, None, None
+            image_ready = False
+
+            try:
+                # --- Result Processing --- 
+                if job_type in ['t2i', 'i2i', 'upscale']:
+                    if hasattr(result, 'image_response') and result.image_response:
+                        image_out = base_processor.process_image_response(result)
+                        image_ready = image_out is not None
+                    else: error_out = f"Completed job {job_id} ({job_type}) has no image_response."
+                elif job_type == 'i2v':
+                    if hasattr(result, 'video_response') and result.video_response:
+                        processed_urls = base_processor.process_video_response(result)
+                        video_urls_out = processed_urls[0] if processed_urls else None
+                        image_ready = bool(video_urls_out)
+                        
+                        # Download video if requested
+                        if download_video and video_urls_out:
+                            try:
+                                video_path = base_processor.download_video(video_urls_out)
+                                print(f"Downloaded video to {video_path}")
+                            except Exception as e:
+                                print(f"Error downloading video: {e}")
+                                video_path = f"Error: {str(e)}"
+                    else: error_out = f"Completed job {job_id} ({job_type}) has no video_response."
+                elif job_type == 'i2t':
+                    text_result = None
+                    if hasattr(result, 'text_response'): text_result = str(result.text_response)
+                    elif hasattr(result, 'text'): text_result = str(result.text)
+                    elif isinstance(result, str): text_result = result
+                    if text_result is not None: video_urls_out = text_result; image_ready = True
+                    else: error_out = f"Completed job {job_id} ({job_type}) lacks expected text field."
+                else: error_out = f"Unknown job type '{job_type}' for job {job_id}"
+                # --- End Result Processing --- 
+
+                if error_out:
+                    print(f"Livepeer Job Getter: Error processing result for {job_id}: {error_out}")
+                    return (blank_image, video_urls_out, "processing_error", error_out, False, None)
+                else:
+                    final_image_out = image_out if image_ready and image_out is not None else blank_image
+                    print(f"Livepeer Job Getter: Job {job_id} processed successfully. Storing result and marking as delivered.")
+                    # --- Store Processed Result & Mark as Delivered --- 
+                    with _job_store_lock:
+                        if job_id in _livepeer_job_store:
+                             # Store the processed outputs for future retrieval
+                            _livepeer_job_store[job_id]['processed_image'] = final_image_out 
+                            _livepeer_job_store[job_id]['processed_urls'] = video_urls_out
+                            _livepeer_job_store[job_id]['video_path'] = video_path
+                            _livepeer_job_store[job_id]['status'] = 'delivered'
+                    # --- Return Processed Results --- 
+                    return (final_image_out, video_urls_out, 'delivered', None, image_ready, video_path)
+
+            except Exception as e:
+                print(f"Livepeer Job Getter: Exception processing result for job {job_id}: {e}")
+                traceback.print_exc()
+                return (blank_image, None, "processing_error", f"Exception processing result: {str(e)}", False, None)
+
+        # If pending, just report status and return placeholders
+        elif status == 'pending':
+            print(f"Livepeer Job Getter: Job {job_id} is still pending.")
+            return (blank_image, None, status, "Job is pending.", False, None)
+        
+        # If already delivered, retrieve and return the STORED results
+        elif status == 'delivered':
+             print(f"Livepeer Job Getter: Job {job_id} already delivered. Returning stored result.")
+             # Retrieve stored processed results
+             stored_image = job_info_copy.get('processed_image', blank_image) # Use blank as default if missing
+             stored_urls = job_info_copy.get('processed_urls', None)
+             stored_video_path = job_info_copy.get('video_path', None)
+             
+             # If video path not available but URL is, and download is requested, try to download now
+             if stored_video_path is None and stored_urls and download_video:
+                 try:
+                     base_processor = LivepeerBase()
+                     stored_video_path = base_processor.download_video(stored_urls)
+                     # Update the stored video path
+                     with _job_store_lock:
+                         if job_id in _livepeer_job_store:
+                             _livepeer_job_store[job_id]['video_path'] = stored_video_path
+                 except Exception as e:
+                     print(f"Error downloading video: {e}")
+                     stored_video_path = f"Error: {str(e)}"
+             
+             # Determine readiness based on stored data (primarily if image exists beyond blank)
+             is_stored_image_valid = stored_image is not None and stored_image.shape[1] > blank_height # Check if not the default blank
+             stored_ready = is_stored_image_valid or bool(stored_urls)
+             return (stored_image, stored_urls, status, "Results previously delivered.", stored_ready, stored_video_path)
+
+        # If failed, return placeholders and 'failed' status
+        elif status == 'failed':
+            error_msg = job_info_copy.get('error', 'Unknown error')
+            print(f"Livepeer Job Getter: Job {job_id} failed: {error_msg}")
+            return (blank_image, None, status, error_msg, False, None)
+
+        # Handle any other unknown status (like processing_error)
+        else:
+            print(f"Livepeer Job Getter: Job {job_id} has status: {status}")
+            error_msg = job_info_copy.get('error', f"Unknown status '{status}'") 
+            return (blank_image, None, status, error_msg, False, None)
 
 # Note: Need to register LivepeerJobGetter in __init__.py 

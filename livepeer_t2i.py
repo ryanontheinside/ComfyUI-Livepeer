@@ -22,7 +22,7 @@ class LivepeerT2I(LivepeerBase):
             },
             "optional": {
                 "negative_prompt": ("STRING", {"multiline": True, "default": ""}),
-                "model_id": ("STRING", {"multiline": False, "default": ""}), # e.g., "ByteDance/SDXL-Lightning"
+                "model_id": ("STRING", {"multiline": False, "default": "ByteDance/SDXL-Lightning"}), # e.g., "ByteDance/SDXL-Lightning"
                 "loras": ("STRING", {"multiline": True, "default": ""}), # e.g., "{ \"latent-consistency/lcm-lora-sdxl\": 1.0 }"
                 "height": ("INT", {"default": 576, "min": 64, "max": 2048, "step": 64}),
                 "width": ("INT", {"default": 1024, "min": 64, "max": 2048, "step": 64}),
@@ -61,12 +61,13 @@ class LivepeerT2I(LivepeerBase):
 
         # Define the operation function for retry/async logic
         def operation_func(livepeer):
-            # Explicitly use livepeer.generate based on SDK structure
             return livepeer.generate.text_to_image(request=t2i_args)
 
         if run_async:
             job_id = self.trigger_async_job(api_key, max_retries, retry_delay, operation_func, self.JOB_TYPE)
-            return (None, job_id)
+            # Create a blank image with the requested dimensions
+            blank_image = torch.zeros((1, height, width, 3), dtype=torch.float32)
+            return (blank_image, job_id)
         else:
             response = self.execute_with_retry(api_key, max_retries, retry_delay, operation_func)
             image_tensor = self.process_image_response(response)

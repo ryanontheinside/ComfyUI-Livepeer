@@ -17,7 +17,7 @@ class LivepeerUpscale(LivepeerBase):
                 "prompt": ("STRING", {"multiline": True, "default": "Make this image high resolution"}), # Prompt seems required by BodyGenUpscale
             },
             "optional": {
-                 "model_id": ("STRING", {"multiline": False, "default": ""}), # e.g., stabilityai/stable-diffusion-x4-upscaler
+                 "model_id": ("STRING", {"multiline": False, "default": "stabilityai/stable-diffusion-x4-upscaler"}),
                  "safety_check": ("BOOLEAN", {"default": True}),
                  "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}), # Use 0 for None/random
                  "num_inference_steps": ("INT", {"default": 75, "min": 1, "max": 150, "step": 1}),
