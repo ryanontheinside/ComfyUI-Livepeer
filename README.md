@@ -1,3 +1,15 @@
+# WORK IN PROGRESS
+
+
+
+
+
+
+
+
+
+
+
 # ComfyUI Livepeer Integration
 
 This extension provides ComfyUI nodes for Livepeer AI generation endpoints with built-in retry functionality.
