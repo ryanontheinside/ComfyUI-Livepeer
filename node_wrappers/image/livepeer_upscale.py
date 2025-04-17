@@ -45,11 +45,14 @@ class LivepeerUpscale(LivepeerBase):
 
         # Prepare the input image using the base class method
         livepeer_image = self.prepare_image(image)
-
+        upscl_img = components.BodyGenUpscaleImage(
+            file_name=livepeer_image.file_name,
+            content=livepeer_image.content,
+        )
         # Prepare arguments for the Livepeer API call
         # Note: SDK uses BodyGenUpscale as the request object
         upscale_params = components.BodyGenUpscale(
-            image=livepeer_image,
+            image=upscl_img,
             prompt=prompt, # Prompt is required in BodyGenUpscale
             model_id=model_id if model_id else None,
             safety_check=safety_check,
