@@ -3,7 +3,7 @@ import numpy as np
 import json
 from livepeer_ai import Livepeer
 from livepeer_ai.models import components
-from ...src.livepeer_core import LivepeerBase
+from ...src.livepeer_base import LivepeerBase
 import uuid
 
 class LivepeerLLM(LivepeerBase):
@@ -25,8 +25,7 @@ class LivepeerLLM(LivepeerBase):
                 "temperature": ("FLOAT", {"default": 0.7, "min": 0.0, "max": 2.0, "step": 0.01}),
                 "top_p": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "max_tokens": ("INT", {"default": 1024, "min": 1, "max": 4096, "step": 1}),
-                "frequency_penalty": ("FLOAT", {"default": 0.0, "min": -2.0, "max": 2.0, "step": 0.01}),
-                "presence_penalty": ("FLOAT", {"default": 0.0, "min": -2.0, "max": 2.0, "step": 0.01}),
+                "top_k": ("INT", {"default": 0, "min": 0, "max": 100, "step": 1}),
             }
         }
         # Add common inputs into the 'optional' category
@@ -42,7 +41,7 @@ class LivepeerLLM(LivepeerBase):
 
     def run_llm(self, enabled, api_key, max_retries, retry_delay, run_async, synchronous_timeout, 
                prompt, model_id="", messages="[]", system_prompt="", temperature=0.7, top_p=1.0, 
-               max_tokens=1024, frequency_penalty=0.0, presence_penalty=0.0):
+               max_tokens=1024, top_k=0):
         # Skip API call if disabled
         if not enabled:
             return (None,)
@@ -79,8 +78,7 @@ class LivepeerLLM(LivepeerBase):
             temperature=temperature,
             top_p=top_p,
             max_tokens=max_tokens,
-            frequency_penalty=frequency_penalty,
-            presence_penalty=presence_penalty
+            top_k=top_k
         )
 
         # Define the operation function for retry/async logic

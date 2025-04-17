@@ -2,7 +2,7 @@ import torch
 import numpy as np
 from livepeer_ai import Livepeer
 from livepeer_ai.models import components
-from ...src.livepeer_core import LivepeerBase
+from ...src.livepeer_base import LivepeerBase
 from ...config_manager import config_manager
 import uuid
 
@@ -22,10 +22,7 @@ class LivepeerT2S(LivepeerBase):
             },
             "optional": {
                 "model_id": ("STRING", {"multiline": False, "default": default_model}),
-                "voice": ("STRING", {"multiline": False, "default": "alloy"}),  # e.g., "alloy", "echo", "fable", "onyx", "nova", "shimmer"
-                "speed": ("FLOAT", {"default": 1.0, "min": 0.25, "max": 4.0, "step": 0.01}),
-                "format": ("STRING", {"multiline": False, "default": "mp3"}),  # "mp3", "opus", "aac", "flac"
-                "response_format": ("STRING", {"multiline": False, "default": "mp3"}),  # Usually the same as format
+                "description": ("STRING", {"multiline": False, "default": "A male speaker delivers a slightly expressive and animated speech with a moderate speed and pitch."}),  # e.g., "alloy", "echo", "fable", "onyx", "nova", "shimmer"
             }
         }
         # Add common inputs into the 'optional' category
@@ -40,18 +37,15 @@ class LivepeerT2S(LivepeerBase):
     CATEGORY = "Livepeer"
 
     def text_to_speech(self, enabled, api_key, max_retries, retry_delay, run_async, synchronous_timeout, 
-                       text, model_id="", voice="alloy", speed=1.0, format="mp3", response_format="mp3"):
+                       text, model_id="", description=""):
         # Skip API call if disabled
         if not enabled:
             return (None,)
         
         t2s_args = components.TextToSpeechParams(
-            input=text,
-            model=model_id if model_id else None,
-            voice=voice,
-            speed=speed,
-            format=format,
-            response_format=response_format if response_format else None
+            text=text,
+            model_id=model_id if model_id else None,
+            description=description if description else None
         )
 
         # Define the operation function for retry/async logic

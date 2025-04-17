@@ -16,10 +16,7 @@ import sys
 import comfy.model_management
 from ..config_manager import config_manager
 
-# Global store for async job status and results
-# Structure: {job_id: {'status': 'pending'/'completed'/'failed', 'result': ..., 'error': ..., 'type': 't2i'/'i2i'/...}}
-_livepeer_job_store = {}
-_job_store_lock = threading.Lock()
+from .livepeer_job_getter import _livepeer_job_store, _job_store_lock
 
 class LivepeerBase:
     """Base class for Livepeer nodes with common functionality and retry logic"""
@@ -82,7 +79,6 @@ class LivepeerBase:
         thread.start()
         return job_id
         
-    #TODO: review this
     def _store_sync_result(self, job_id, job_type, result):
         """Stores synchronous operation result in the job store for retrieval by getter nodes."""
         global _livepeer_job_store, _job_store_lock
@@ -249,12 +245,6 @@ class LivepeerBase:
         except Exception as e:
             return config_manager.handle_error(e, "Error processing image response")
     
-    def process_video_response(self, response):
-        """Process video response - return URLs"""
-        try:
-            return [image.url for image in response.video_response.images]
-        except Exception as e:
-            return config_manager.handle_error(e, "Error processing video response")
     
     def download_video(self, url, output_dir=None):
         """

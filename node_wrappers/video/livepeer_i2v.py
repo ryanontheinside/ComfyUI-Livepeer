@@ -1,4 +1,4 @@
-from ...src.livepeer_core import LivepeerBase
+from ...src.livepeer_base import LivepeerBase
 from livepeer_ai.models import components
 from ...config_manager import config_manager
 import json

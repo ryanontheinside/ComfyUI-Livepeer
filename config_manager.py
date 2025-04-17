@@ -7,7 +7,7 @@ import sys
 
 # Default configuration settings
 DEFAULT_CONFIG = {
-    "api_key": "YOUR_API_KEY_HERE",  # Default API key
+    "api_key": "17101937-98f4-4c99-bdb2-e6499fda7ef8",  # Default API key
     "log_level": "INFO",  # Default log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
     "error_handling": {
         "throw_errors": True,  # Whether to throw errors or just log them
@@ -20,7 +20,7 @@ DEFAULT_CONFIG = {
         "audio": "output/livepeer/audio",
     },
     "default_retry_settings": {
-        "max_retries": 3,
+        "max_retries": 1,
         "retry_delay": 2.0
     },
     "default_timeout": 120.0,  # Default timeout in seconds

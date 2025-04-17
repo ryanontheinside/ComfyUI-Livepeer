@@ -1,15 +1,18 @@
 import requests
 import torch
 import numpy as np
+import tempfile
+import soundfile as sf
 from livepeer_ai import Livepeer
 from livepeer_ai.models import components
-from ...src.livepeer_core import LivepeerBase
+from ...src.livepeer_base import LivepeerBase
+from ...src.livepeer_media_processor import LivepeerMediaProcessor
 from ...config_manager import config_manager
 import uuid
 import os
 
 class LivepeerA2T(LivepeerBase):
-    JOB_TYPE = "i2t"  # Using the same job type as image-to-text since both return text
+    JOB_TYPE = "a2t"  # Changed to a2t to be more descriptive
 
     @classmethod
     def INPUT_TYPES(s):
@@ -20,7 +23,7 @@ class LivepeerA2T(LivepeerBase):
         # Define node-specific inputs
         node_inputs = {
             "required": {
-                "audio_file": ("STRING", {"multiline": False, "default": ""}),
+                "audio": ("AUDIO",),
             },
             "optional": {
                 "model_id": ("STRING", {"multiline": False, "default": default_model}),
@@ -42,47 +45,56 @@ class LivepeerA2T(LivepeerBase):
     CATEGORY = "Livepeer"
 
     def audio_to_text(self, enabled, api_key, max_retries, retry_delay, run_async, synchronous_timeout, 
-                      audio_file, model_id="", language="", prompt="", temperature=0.0, response_format="text"):
+                      audio, model_id="", language="", prompt="", temperature=0.0, response_format="text"):
         # Skip API call if disabled
         if not enabled:
             return (None,)
         
-        # Check if audio file exists
-        if not os.path.exists(audio_file):
-            raise ValueError(f"Audio file does not exist: {audio_file}")
+        # Convert audio to temporary file using the centralized processor
+        temp_path, audio_data = LivepeerMediaProcessor.prepare_audio_from_comfy_format(audio)
         
-        # Prepare audio file
-        with open(audio_file, "rb") as f:
-            audio_data = f.read()
+        if temp_path is None or audio_data is None:
+            raise ValueError("Failed to prepare audio data from the provided ComfyUI audio format")
         
-        audio = components.Audio(
-            file_name=os.path.basename(audio_file),
-            content=audio_data
-        )
-        
-        a2t_args = components.BodyGenAudioToText(
-            audio=audio,
-            model_id=model_id if model_id else None,
-            language=language if language else None,
-            prompt=prompt if prompt else None,
-            temperature=temperature,
-            response_format=response_format if response_format else None
-        )
+        try:
+            # Create the audio component for the API
+            audio_obj = components.Audio(
+                file_name=os.path.basename(temp_path),
+                content=audio_data
+            )
+            
+            # Prepare API arguments
+            a2t_args = components.BodyGenAudioToText(
+                audio=audio_obj,
+                model_id=model_id if model_id else None,
+                language=language if language else None,
+                prompt=prompt if prompt else None,
+                temperature=temperature,
+                response_format=response_format if response_format else None
+            )
 
-        # Define the operation function for retry/async logic
-        def operation_func(livepeer):
-            return livepeer.generate.audio_to_text(request=a2t_args)
+            # Define the operation function for retry/async logic
+            def operation_func(livepeer):
+                return livepeer.generate.audio_to_text(request=a2t_args)
 
-        if run_async:
-            job_id = self.trigger_async_job(api_key, max_retries, retry_delay, operation_func, self.JOB_TYPE)
-            return (job_id,)
-        else:
-            # Execute synchronously
-            response = self.execute_with_retry(api_key, max_retries, retry_delay, operation_func, synchronous_timeout=synchronous_timeout)
-            # Generate Job ID and store result directly for sync mode
-            job_id = str(uuid.uuid4())
-            self._store_sync_result(job_id, self.JOB_TYPE, response)
-            return (job_id,)
+            if run_async:
+                job_id = self.trigger_async_job(api_key, max_retries, retry_delay, operation_func, self.JOB_TYPE)
+                return (job_id,)
+            else:
+                # Execute synchronously
+                response = self.execute_with_retry(api_key, max_retries, retry_delay, operation_func, synchronous_timeout=synchronous_timeout)
+                # Generate Job ID and store result directly for sync mode
+                job_id = str(uuid.uuid4())
+                self._store_sync_result(job_id, self.JOB_TYPE, response)
+                return (job_id,)
+                
+        finally:
+            # Clean up temporary file
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                except Exception as e:
+                    config_manager.log("warning", f"Failed to delete temporary audio file: {str(e)}")
 
 NODE_CLASS_MAPPINGS = {
     "LivepeerA2T": LivepeerA2T,
