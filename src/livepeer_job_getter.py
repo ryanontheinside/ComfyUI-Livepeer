@@ -1,12 +1,17 @@
 import time
 import torch
-from .livepeer_core import _livepeer_job_store, _job_store_lock, LivepeerBase
+import threading
 from ..config_manager import config_manager
 
 # Define default blank image for placeholders
 BLANK_HEIGHT = 64
 BLANK_WIDTH = 64
 BLANK_IMAGE = torch.zeros((1, BLANK_HEIGHT, BLANK_WIDTH, 3), dtype=torch.float32)
+
+# Global store for async job status and results
+# Structure: {job_id: {'status': 'pending'/'completed'/'failed', 'result': ..., 'error': ..., 'type': 't2i'/'i2i'/...}}
+_livepeer_job_store = {}
+_job_store_lock = threading.Lock()
 
 class LivepeerJobGetterBase:
     """Base class for Livepeer Job Getter nodes."""

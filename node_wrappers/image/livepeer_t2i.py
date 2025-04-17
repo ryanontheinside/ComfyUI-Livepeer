@@ -1,4 +1,3 @@
-#API key 17101937-98f4-4c99-bdb2-e6499fda7ef8
 import requests
 from PIL import Image
 from io import BytesIO
@@ -6,7 +5,7 @@ import numpy as np
 import torch
 from livepeer_ai import Livepeer
 from livepeer_ai.models import components
-from ...src.livepeer_core import LivepeerBase
+from ...src.livepeer_base import LivepeerBase
 from ...config_manager import config_manager
 import uuid
 

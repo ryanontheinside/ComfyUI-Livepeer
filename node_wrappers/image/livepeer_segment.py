@@ -2,7 +2,7 @@ import torch
 import numpy as np
 from livepeer_ai import Livepeer
 from livepeer_ai.models import components
-from ...src.livepeer_core import LivepeerBase
+from ...src.livepeer_base import LivepeerBase
 from ...config_manager import config_manager
 import uuid
 

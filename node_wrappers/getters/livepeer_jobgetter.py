@@ -1,9 +1,11 @@
-import time
-import torch
-import traceback
 import os
-from ...src.livepeer_core import LivepeerBase
-from ...src.livepeer_job_base import LivepeerJobGetterBase, BLANK_IMAGE, BLANK_HEIGHT, BLANK_WIDTH
+import numpy as np
+import soundfile as sf
+import torch
+
+from ...src.livepeer_job_getter import LivepeerJobGetterBase, BLANK_IMAGE, BLANK_HEIGHT, BLANK_WIDTH
+from ...src.livepeer_media_processor import LivepeerMediaProcessor
+from ...src.livepeer_response_handler import LivepeerResponseHandler
 from ...config_manager import config_manager
 
 class LivepeerImageJobGetter(LivepeerJobGetterBase):
@@ -28,17 +30,21 @@ class LivepeerImageJobGetter(LivepeerJobGetterBase):
 
     def _process_raw_result(self, job_id, job_type, raw_result, **kwargs):
         """Processes raw image response into tensor and returns processed data."""
-        if raw_result and hasattr(raw_result, 'image_response') and raw_result.image_response:
-            try:
-                base_processor = LivepeerBase() # Instantiate to access processing methods
-                image_out = base_processor.process_image_response(raw_result)
+        try:
+            # Use LivepeerResponseHandler to check and validate response type
+            has_image_data, response_obj = LivepeerResponseHandler.extract_image_data(job_id, job_type, raw_result)
+            
+            if has_image_data and response_obj is not None:
+                # Process the validated response
+                image_out = LivepeerMediaProcessor.process_image_response(response_obj)
                 image_ready = image_out is not None and image_out.shape[1] > BLANK_HEIGHT
-                return (image_out, image_ready), {'processed_image': image_out} # Return processed tuple and data to store
-            except Exception as e:
-                config_manager.handle_error(e, f"Error in _process_raw_result (Image) for job {job_id}", raise_error=False)
-                return None, None # Indicate failure
-        else:
-            config_manager.log("error", f"Job {job_id} ({job_type}) has no valid image_response in its raw result.")
+                return (image_out, image_ready), {'processed_image': image_out}
+            else:
+                # If validation failed, return None
+                return None, None
+            
+        except Exception as e:
+            config_manager.handle_error(e, f"Error in _process_raw_result (Image) for job {job_id}", raise_error=False)
             return None, None # Indicate failure
 
     def get_image_job_result(self, job_id):
@@ -48,8 +54,8 @@ class LivepeerImageJobGetter(LivepeerJobGetterBase):
 
 class LivepeerVideoJobGetter(LivepeerJobGetterBase):
     EXPECTED_JOB_TYPES = ["i2v", "live2video"]  # Added live2video job type
-    PROCESSED_RESULT_KEYS = ['processed_url', 'processed_path'] # Keys used to store results
-    DEFAULT_OUTPUTS = (None, None, False) # video_url, video_path, video_ready
+    PROCESSED_RESULT_KEYS = ['processed_url', 'processed_path', 'processed_frames', 'processed_audio'] # Keys used to store results
+    DEFAULT_OUTPUTS = (None, None, None, None, False) # video_url, video_path, frames, audio, video_ready
 
     # Define specific input type for video jobs
     INPUT_TYPES_DICT = {
@@ -64,41 +70,65 @@ class LivepeerVideoJobGetter(LivepeerJobGetterBase):
     def INPUT_TYPES(cls):
         return cls.INPUT_TYPES_DICT
         
-    RETURN_TYPES = ("STRING", "STRING", "BOOLEAN") + LivepeerJobGetterBase.RETURN_TYPES # video_url, video_path, video_ready
-    RETURN_NAMES = ("video_url", "video_path", "video_ready") + LivepeerJobGetterBase.RETURN_NAMES
+    RETURN_TYPES = ("STRING", "STRING", "IMAGE", "AUDIO", "BOOLEAN") + LivepeerJobGetterBase.RETURN_TYPES # video_url, video_path, frames, audio, video_ready
+    RETURN_NAMES = ("video_url", "video_path", "frames", "audio", "video_ready") + LivepeerJobGetterBase.RETURN_NAMES
     FUNCTION = "get_video_job_result"
 
     def _process_raw_result(self, job_id, job_type, raw_result, **kwargs):
         """Processes raw video response, downloads if needed, returns processed data."""
-        if raw_result and hasattr(raw_result, 'video_response') and raw_result.video_response:
-            try:
-                base_processor = LivepeerBase()
-                processed_urls = base_processor.process_video_response(raw_result)
-                video_url_out = processed_urls[0] if processed_urls else None
-                video_ready = bool(video_url_out)
+        try:
+            # Use LivepeerResponseHandler to check and validate response type
+            has_video_data, response_obj, video_urls = LivepeerResponseHandler.extract_video_data(job_id, job_type, raw_result)
+            
+            if has_video_data and response_obj is not None:
+                video_url_out = video_urls[0] if video_urls else None
+                video_ready = False  # Only set to True after successful processing
                 video_path_out = None
+                video_frames = None
+                video_audio = None
                 
                 # Check kwargs for download flag, default to True if not provided
                 download_video = kwargs.get('download_video', True)
                 
-                if video_ready and download_video:
+                # Download the video if needed
+                if video_url_out and download_video:
                     config_manager.log("info", f"Livepeer Job Getter: Downloading video for job {job_id} from {video_url_out}")
                     try:
-                        video_path_out = base_processor.download_video(video_url_out)
+                        video_path_out = LivepeerMediaProcessor.download_media(video_url_out, "videos")
+                        
+                        # Load the video into tensor format
+                        video_info = LivepeerMediaProcessor.load_video_to_tensor(
+                            video_path=video_path_out, 
+                            extract_audio=True
+                        )
+                        
+                        if video_info is None:
+                            raise ValueError(f"Failed to load video from {video_path_out}")
+                            
+                        video_frames = video_info['frames']
+                        video_audio = video_info['audio']
+                        video_ready = True
+                        config_manager.log("info", f"Successfully loaded video from {video_path_out}")
+                            
                     except Exception as e:
-                        error_msg = config_manager.handle_error(e, f"Error downloading video for job {job_id}", raise_error=False)
-                        video_path_out = f"Error: {error_msg}" # Store error in path field
+                        error_msg = config_manager.handle_error(e, f"Error processing video for job {job_id}", raise_error=False)
+                        config_manager.log("error", f"Failed to process video: {error_msg}")
+                        # Don't continue with processing if video loading failed
+                        return None, None
                 
                 processed_data_to_store = {
                          'processed_url': video_url_out, 
-                         'processed_path': video_path_out
+                         'processed_path': video_path_out,
+                         'processed_frames': video_frames,
+                         'processed_audio': video_audio
                      }
-                return (video_url_out, video_path_out, video_ready), processed_data_to_store
-            except Exception as e:
-                config_manager.handle_error(e, f"Error in _process_raw_result (Video) for job {job_id}", raise_error=False)
-                return None, None # Indicate failure
-        else:
-            config_manager.log("error", f"Job {job_id} ({job_type}) has no valid video_response in its raw result.")
+                return (video_url_out, video_path_out, video_frames, video_audio, video_ready), processed_data_to_store
+            else:
+                # If validation failed, return None
+                return None, None
+                
+        except Exception as e:
+            config_manager.handle_error(e, f"Error in _process_raw_result (Video) for job {job_id}", raise_error=False)
             return None, None # Indicate failure
 
     def get_video_job_result(self, job_id, download_video=True):
@@ -106,7 +136,7 @@ class LivepeerVideoJobGetter(LivepeerJobGetterBase):
         return self._get_or_process_job_result(job_id, download_video=download_video)
 
 class LivepeerTextJobGetter(LivepeerJobGetterBase):
-    EXPECTED_JOB_TYPES = ["i2t", "llm"]  # Added llm job type
+    EXPECTED_JOB_TYPES = ["i2t", "llm", "a2t"]  # Added a2t job type for audio-to-text
     PROCESSED_RESULT_KEYS = ['processed_text'] # Key used to store processed text
     DEFAULT_OUTPUTS = ("", False) # text_output, text_ready
 
@@ -126,29 +156,19 @@ class LivepeerTextJobGetter(LivepeerJobGetterBase):
 
     def _process_raw_result(self, job_id, job_type, raw_result, **kwargs):
         """Processes raw text response and returns processed data."""
-        text_out = ""
         try:
-            # Adapt text extraction logic
-            if hasattr(raw_result, 'text_response') and hasattr(raw_result.text_response, 'text') and raw_result.text_response.text is not None: 
-                text_out = str(raw_result.text_response.text)
-            elif hasattr(raw_result, 'text'): # Direct attribute on result object
-                 text_out = str(raw_result.text)
-            elif isinstance(raw_result, str): # Raw string result
-                text_out = raw_result
-            # Handle LLM response format
-            elif hasattr(raw_result, 'choices') and raw_result.choices:
-                if hasattr(raw_result.choices[0], 'message') and hasattr(raw_result.choices[0].message, 'content'):
-                    text_out = str(raw_result.choices[0].message.content)
+            # Use LivepeerResponseHandler to check and validate text response
+            has_text_data, text_out = LivepeerResponseHandler.extract_text_data(job_id, job_type, raw_result)
             
-            if text_out: # Check if we got some text
-                 text_ready = True
-                 return (text_out, text_ready), {'processed_text': text_out}
+            if has_text_data and text_out:
+                text_ready = True
+                return (text_out, text_ready), {'processed_text': text_out}
             else:
-                 config_manager.log("error", f"Job {job_id} ({job_type}) did not contain expected text output in result: {raw_result}")
-                 return None, None # Indicate failure
+                return None, None
+                
         except Exception as e:
             config_manager.handle_error(e, f"Error in _process_raw_result (Text) for job {job_id}", raise_error=False)
-            return None, None # Indicate failure
+            return None, None
 
     def get_text_job_result(self, job_id):
         # Delegate all logic to the base class handler
@@ -157,8 +177,8 @@ class LivepeerTextJobGetter(LivepeerJobGetterBase):
 # New AudioJobGetter for text-to-speech operations
 class LivepeerAudioJobGetter(LivepeerJobGetterBase):
     EXPECTED_JOB_TYPES = ["t2s"]  # Audio from text-to-speech
-    PROCESSED_RESULT_KEYS = ['processed_url', 'processed_path'] # Keys used to store results
-    DEFAULT_OUTPUTS = (None, None, False) # audio_url, audio_path, audio_ready
+    PROCESSED_RESULT_KEYS = ['processed_url', 'processed_path', 'processed_audio'] # Keys used to store results
+    DEFAULT_OUTPUTS = (None, False) # audio_output, audio_ready
 
     # Define specific input type for audio jobs
     INPUT_TYPES_DICT = {
@@ -173,48 +193,70 @@ class LivepeerAudioJobGetter(LivepeerJobGetterBase):
     def INPUT_TYPES(cls):
         return cls.INPUT_TYPES_DICT
         
-    RETURN_TYPES = ("STRING", "STRING", "BOOLEAN") + LivepeerJobGetterBase.RETURN_TYPES # audio_url, audio_path, audio_ready
-    RETURN_NAMES = ("audio_url", "audio_path", "audio_ready") + LivepeerJobGetterBase.RETURN_NAMES
+    RETURN_TYPES = ("AUDIO", "BOOLEAN") + LivepeerJobGetterBase.RETURN_TYPES # audio_output, audio_ready
+    RETURN_NAMES = ("audio_output", "audio_ready") + LivepeerJobGetterBase.RETURN_NAMES
     FUNCTION = "get_audio_job_result"
 
     def _process_raw_result(self, job_id, job_type, raw_result, **kwargs):
         """Processes raw audio response, downloads if needed, returns processed data."""
-        if raw_result and hasattr(raw_result, 'audio_response'):
-            try:
-                base_processor = LivepeerBase()
-                # Extract audio URL from response
-                audio_url_out = raw_result.audio_response.url if hasattr(raw_result.audio_response, 'url') else None
-                audio_ready = bool(audio_url_out)
+        try:
+            # Use LivepeerResponseHandler to check and validate audio response
+            has_audio_data, response_obj, audio_url = LivepeerResponseHandler.extract_audio_data(job_id, job_type, raw_result)
+            
+            if has_audio_data and response_obj is not None and audio_url:
+                audio_ready = False
+                audio_output = None
                 audio_path_out = None
                 
                 # Check kwargs for download flag, default to True if not provided
                 download_audio = kwargs.get('download_audio', True)
                 
-                if audio_ready and download_audio:
-                    config_manager.log("info", f"Livepeer Job Getter: Downloading audio for job {job_id} from {audio_url_out}")
+                # Download the audio if needed
+                if download_audio:
+                    config_manager.log("info", f"Livepeer Job Getter: Downloading audio for job {job_id} from {audio_url}")
                     try:
-                        # Use the download method to get audio, but specify audio output path
-                        audio_path_out = base_processor.download_video(audio_url_out, config_manager.get_output_path("audio"))
-                        # Rename extension based on format if needed (assuming mp3 default)
-                        if hasattr(raw_result, 'format') and raw_result.format:
+                        # Download the audio file
+                        audio_path_out = LivepeerMediaProcessor.download_media(audio_url, "audio")
+                        
+                        # Handle audio format if needed
+                        if hasattr(response_obj, 'format') and response_obj.format:
                             base_ext = os.path.splitext(audio_path_out)[0]
-                            new_path = f"{base_ext}.{raw_result.format}"
+                            new_path = f"{base_ext}.{response_obj.format}"
                             os.rename(audio_path_out, new_path)
                             audio_path_out = new_path
+                        
+                        # Load audio as waveform for ComfyUI
+                        if os.path.exists(audio_path_out):
+                            try:
+                                # Use the centralized audio loading method
+                                audio_output = LivepeerMediaProcessor.load_audio_to_tensor(audio_path_out)
+                                if audio_output is not None:
+                                    audio_ready = True
+                                else:
+                                    config_manager.log("error", f"Failed to load audio from {audio_path_out}")
+                                    return None, None
+                            
+                            except Exception as e:
+                                error_msg = config_manager.handle_error(e, f"Error loading audio file {audio_path_out}", raise_error=False)
+                                config_manager.log("error", f"Failed to load audio: {error_msg}")
+                                return None, None
                     except Exception as e:
                         error_msg = config_manager.handle_error(e, f"Error downloading audio for job {job_id}", raise_error=False)
-                        audio_path_out = f"Error: {error_msg}" # Store error in path field
+                        config_manager.log("error", f"Failed to download audio: {error_msg}")
+                        return None, None
                 
                 processed_data_to_store = {
-                         'processed_url': audio_url_out, 
-                         'processed_path': audio_path_out
-                     }
-                return (audio_url_out, audio_path_out, audio_ready), processed_data_to_store
-            except Exception as e:
-                config_manager.handle_error(e, f"Error in _process_raw_result (Audio) for job {job_id}", raise_error=False)
-                return None, None # Indicate failure
-        else:
-            config_manager.log("error", f"Job {job_id} ({job_type}) has no valid audio_response in its raw result.")
+                        'processed_url': audio_url, 
+                        'processed_path': audio_path_out,
+                        'processed_audio': audio_output
+                    }
+                return (audio_output, audio_ready), processed_data_to_store
+            else:
+                # If validation failed, return None
+                return None, None
+                
+        except Exception as e:
+            config_manager.handle_error(e, f"Error in _process_raw_result (Audio) for job {job_id}", raise_error=False)
             return None, None # Indicate failure
 
     def get_audio_job_result(self, job_id, download_audio=True):

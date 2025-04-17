@@ -3,7 +3,7 @@ import numpy as np
 import json
 from livepeer_ai import Livepeer
 from livepeer_ai.models import components
-from ...src.livepeer_core import LivepeerBase
+from ...src.livepeer_base import LivepeerBase
 import uuid
 
 class LivepeerLive2Video(LivepeerBase):

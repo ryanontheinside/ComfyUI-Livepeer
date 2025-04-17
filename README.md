@@ -12,7 +12,7 @@
 
 # ComfyUI-Livepeer
 
-A ComfyUI extension that provides integration with [Livepeer](https://livepeer.org/)'s AI services.
+A ComfyUI extension that provides integration with [Livepeer](https://livepeer.org/)'s AI services allowing for both sync and async generation. 
 
 ## Features
 
