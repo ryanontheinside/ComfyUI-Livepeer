@@ -211,7 +211,7 @@ class LivepeerMediaProcessor:
                     config_manager.log("warning", f"No audio track found in video: {video_path}")
                     # Return empty audio in ComfyUI format instead of None
                     return {
-                        'waveform': np.zeros((1, 2), dtype=np.float32),  # Empty stereo waveform (1 sample, 2 channels)
+                        'waveform': torch.zeros((1, 2, 1), dtype=torch.float32),  # Empty stereo waveform, shape [1, 2, 1]
                         'sample_rate': 44100  # Standard sample rate
                     }
                 
@@ -224,24 +224,32 @@ class LivepeerMediaProcessor:
                 if os.path.exists(temp_audio_path):
                     audio_data, sample_rate = sf.read(temp_audio_path)
                     
-                    # If mono, reshape to match expected format
-                    if len(audio_data.shape) == 1:
-                        audio_data = audio_data.reshape(-1, 1)
-                        
                     # Convert to float32 if not already
                     if audio_data.dtype != np.float32:
                         audio_data = audio_data.astype(np.float32)
                     
+                    # Handle dimensions for torchaudio compatibility (channels first: [channels, samples])
+                    if len(audio_data.shape) == 1:  # Mono audio
+                        # Reshape to [1, samples] - one channel
+                        audio_data = audio_data.reshape(1, -1)
+                        audio_tensor = torch.from_numpy(audio_data)
+                        audio_tensor = audio_tensor.unsqueeze(0)  # Add batch dimension [1, 1, samples]
+                    else:  # Stereo or multichannel audio
+                        # Transpose from [samples, channels] to [channels, samples]
+                        audio_data = audio_data.T
+                        audio_tensor = torch.from_numpy(audio_data)
+                        audio_tensor = audio_tensor.unsqueeze(0)  # Add batch dimension [1, channels, samples]
+                    
                     # Return in ComfyUI format
                     return {
-                        'waveform': audio_data,
+                        'waveform': audio_tensor,
                         'sample_rate': sample_rate
                     }
                 else:
                     config_manager.log("error", f"Failed to extract audio from {video_path}")
                     # Return empty audio in ComfyUI format instead of None
                     return {
-                        'waveform': np.zeros((1, 2), dtype=np.float32),  # Empty stereo waveform
+                        'waveform': torch.zeros((1, 2, 1), dtype=torch.float32),  # Empty stereo waveform, shape [1, 2, 1]
                         'sample_rate': 44100  # Standard sample rate
                     }
             
@@ -256,7 +264,7 @@ class LivepeerMediaProcessor:
             config_manager.handle_error(e, f"Error extracting audio from video {video_path}", raise_error=False)
             # Return empty audio in ComfyUI format instead of None on errors
             return {
-                'waveform': np.zeros((1, 2), dtype=np.float32),  # Empty stereo waveform
+                'waveform': torch.zeros((1, 2, 1), dtype=torch.float32),  # Empty stereo waveform, shape [1, 2, 1]
                 'sample_rate': 44100  # Standard sample rate
             }
             
@@ -279,16 +287,21 @@ class LivepeerMediaProcessor:
             # Load audio file
             waveform, sample_rate = sf.read(audio_path)
             
-            # If mono, reshape to match expected format
-            if len(waveform.shape) == 1:
-                waveform = waveform.reshape(-1, 1)
-                
             # Convert to float32 if not already
             if waveform.dtype != np.float32:
                 waveform = waveform.astype(np.float32)
-            
-            # Convert NumPy array to PyTorch tensor
-            waveform_tensor = torch.from_numpy(waveform)
+                
+            # Handle dimensions for ComfyUI audio format [batch, channels, samples]
+            if len(waveform.shape) == 1:  # Mono audio
+                # Reshape to [1, 1, samples] - one channel with batch dimension
+                waveform = waveform.reshape(1, -1)  # First to [1, samples]
+                waveform_tensor = torch.from_numpy(waveform)
+                waveform_tensor = waveform_tensor.unsqueeze(0)  # To [1, 1, samples]
+            else:  # Stereo or multichannel audio
+                # From [samples, channels] to [channels, samples] to [batch, channels, samples]
+                waveform = waveform.transpose()  # To [channels, samples]
+                waveform_tensor = torch.from_numpy(waveform)
+                waveform_tensor = waveform_tensor.unsqueeze(0)  # Add batch dimension [1, channels, samples]
             
             # Create ComfyUI audio dictionary format
             return {
