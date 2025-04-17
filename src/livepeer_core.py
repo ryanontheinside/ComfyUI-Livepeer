@@ -8,12 +8,13 @@ from livepeer_ai import Livepeer
 from livepeer_ai.models.components import Image
 import threading
 import uuid
-import traceback # Added for better error logging in threads
+import traceback
 import os
 import shutil
 import sys
 
 import comfy.model_management
+from ..config_manager import config_manager
 
 # Global store for async job status and results
 # Structure: {job_id: {'status': 'pending'/'completed'/'failed', 'result': ..., 'error': ..., 'type': 't2i'/'i2i'/...}}
@@ -26,13 +27,18 @@ class LivepeerBase:
     @classmethod
     def get_common_inputs(cls):
         """Common input parameters for all Livepeer nodes"""
+        # Get default values from config
+        default_api_key = config_manager.get_api_key()
+        max_retries, retry_delay = config_manager.get_retry_settings()
+        default_timeout = config_manager.get_timeout()
+        
         return {
             "enabled": ("BOOLEAN", {"default": True, "tooltip": "When disabled, API calls will be skipped"}),
-            "api_key": ("STRING", {"default": "17101937-98f4-4c99-bdb2-e6499fda7ef8"}),
-            "max_retries": ("INT", {"default": 3, "min": 1, "max": 10}),
-            "retry_delay": ("FLOAT", {"default": 2.0, "min": 0.5, "max": 10.0}),
-            "run_async": ("BOOLEAN", {"default": False}), # Add async toggle
-            "synchronous_timeout": ("FLOAT", {"default": 120.0, "min": 5.0, "max": 600.0, "tooltip": "Timeout for synchronous operations (per retry). For async operations, this is ignored."}), # Timeout for sync mode
+            "api_key": ("STRING", {"default": default_api_key}),
+            "max_retries": ("INT", {"default": max_retries, "min": 1, "max": 10}),
+            "retry_delay": ("FLOAT", {"default": retry_delay, "min": 0.5, "max": 10.0}),
+            "run_async": ("BOOLEAN", {"default": False}), 
+            "synchronous_timeout": ("FLOAT", {"default": default_timeout, "min": 5.0, "max": 600.0, "tooltip": "Timeout for synchronous operations (per retry). For async operations, this is ignored."}),
         }
     
     def _execute_livepeer_operation(self, api_key, max_retries, retry_delay, operation_func, job_id, job_type):
@@ -44,16 +50,16 @@ class LivepeerBase:
                  if job_id in _livepeer_job_store:
                      _livepeer_job_store[job_id]['type'] = job_type
 
-            print(f"Livepeer Async Job {job_id} ({job_type}): Starting execution.")
+            config_manager.log("info", f"Livepeer Async Job {job_id} ({job_type}): Starting execution.")
             result = self.execute_with_retry(api_key, max_retries, retry_delay, operation_func)
-            print(f"Livepeer Async Job {job_id} ({job_type}): Execution successful.")
+            config_manager.log("info", f"Livepeer Async Job {job_id} ({job_type}): Execution successful.")
             with _job_store_lock:
                 # Set intermediate status indicating completion but pending delivery by getter node
                 if job_id in _livepeer_job_store: # Check if job wasn't cancelled/removed
                     _livepeer_job_store[job_id].update({'status': 'completed_pending_delivery', 'result': result})
         except Exception as e:
-            print(f"Livepeer Async Job {job_id} ({job_type}): Execution failed.")
-            traceback.print_exc() # Print full traceback for debugging
+            config_manager.log("error", f"Livepeer Async Job {job_id} ({job_type}): Execution failed.")
+            config_manager.handle_error(e, f"Error in async job {job_id}", raise_error=False)
             with _job_store_lock:
                  if job_id in _livepeer_job_store: # Check if job wasn't cancelled/removed
                     _livepeer_job_store[job_id].update({'status': 'failed', 'error': str(e)})
@@ -66,7 +72,7 @@ class LivepeerBase:
         with _job_store_lock:
             _livepeer_job_store[job_id] = {'status': 'pending', 'type': job_type} # Initial state
 
-        print(f"Livepeer Async Job {job_id} ({job_type}): Triggered.")
+        config_manager.log("info", f"Livepeer Async Job {job_id} ({job_type}): Triggered.")
 
         thread = threading.Thread(
             target=self._execute_livepeer_operation,
@@ -75,6 +81,19 @@ class LivepeerBase:
         )
         thread.start()
         return job_id
+        
+    #TODO: review this
+    def _store_sync_result(self, job_id, job_type, result):
+        """Stores synchronous operation result in the job store for retrieval by getter nodes."""
+        global _livepeer_job_store, _job_store_lock
+        
+        with _job_store_lock:
+            _livepeer_job_store[job_id] = {
+                'status': 'completed_pending_delivery',
+                'type': job_type,
+                'result': result
+            }
+        config_manager.log("info", f"Livepeer Sync Job {job_id} ({job_type}): Result stored for getter")
 
     # Helper for synchronous execution thread
     def _run_operation_thread(self, api_key, operation_func, result_container):
@@ -99,8 +118,6 @@ class LivepeerBase:
         """
         Execute a Livepeer API operation with retry logic.
         Uses non-blocking polling for UI responsiveness and cancellation.
-        Applies timeout to each attempt.
-        Checks ComfyUI's interrupt flag directly for proper cancellation.
         """
         attempts = 0
         last_error = None
@@ -116,7 +133,7 @@ class LivepeerBase:
             # Check for interruption at the start of each attempt
             check_interrupt()
             
-            print(f"Livepeer Attempt {attempts + 1}/{max_retries}")
+            config_manager.log("info", f"Livepeer Attempt {attempts + 1}/{max_retries}")
             result_container = {'result': None, 'error': None, 'done': False}
             
             thread = threading.Thread(
@@ -138,14 +155,14 @@ class LivepeerBase:
                     # Mark the thread for termination
                     timed_out = True
                     last_error = comfy.model_management.InterruptProcessingException("Operation cancelled by user")
-                    print("Livepeer operation cancelled by user.")
+                    config_manager.log("info", "Livepeer operation cancelled by user.")
                     # Don't wait for thread to complete - allow ComfyUI to cancel
                     break
                 
                 # Check for timeout
                 if time.time() - start_time > synchronous_timeout:
                     timed_out = True
-                    print(f"Livepeer Attempt {attempts + 1} timed out after {synchronous_timeout} seconds.")
+                    config_manager.log("warning", f"Livepeer Attempt {attempts + 1} timed out after {synchronous_timeout} seconds.")
                     # We don't kill the thread, just stop waiting for it in this attempt
                     break 
                 
@@ -159,7 +176,7 @@ class LivepeerBase:
                 if not timed_out:  # Only set if not already set
                     timed_out = True
                     last_error = comfy.model_management.InterruptProcessingException("Operation cancelled by user")
-                    print("Livepeer operation cancelled by user.")
+                    config_manager.log("info", "Livepeer operation cancelled by user.")
 
             # Handle result
             if not timed_out and result_container['done']:
@@ -175,21 +192,21 @@ class LivepeerBase:
             elif result_container['error']:
                 attempts += 1
                 last_error = result_container['error']
-                print(f"Livepeer Attempt {attempts} failed: {str(last_error)}")
+                config_manager.log("error", f"Livepeer Attempt {attempts} failed: {str(last_error)}")
             elif 'result' in result_container and result_container['result'] is not None:
-                 print(f"Livepeer Attempt {attempts + 1} successful.")
+                 config_manager.log("info", f"Livepeer Attempt {attempts + 1} successful.")
                  return result_container['result'] # Success! Exit the function.
             else: # Should not happen if done is True and no error, but handle defensively
                  attempts += 1
                  last_error = RuntimeError("Unknown error: Operation thread finished but provided no result or error.")
-                 print(f"Livepeer Attempt {attempts} failed with unknown error.")
+                 config_manager.log("error", f"Livepeer Attempt {attempts} failed with unknown error.")
 
             # One final cancellation check before considering retry
             check_interrupt()
 
             # If attempt failed (error or timeout) and more retries left:
             if attempts < max_retries:
-                print(f"Retrying in {current_retry_delay} seconds...")
+                config_manager.log("info", f"Retrying in {current_retry_delay} seconds...")
                 # Use polling sleep for retry delay to remain responsive
                 delay_start_time = time.time()
                 while time.time() - delay_start_time < current_retry_delay:
@@ -205,29 +222,39 @@ class LivepeerBase:
                 current_retry_delay *= 1.5 # Exponential backoff
             
         # If loop finishes, all retries failed
-        raise RuntimeError(f"Operation failed after {max_retries} attempts. Last error: {str(last_error)}")
+        error_msg = f"Operation failed after {max_retries} attempts. Last error: {str(last_error)}"
+        return config_manager.handle_error(
+            RuntimeError(error_msg), 
+            "Livepeer operation failed after all retry attempts"
+        )
 
     def process_image_response(self, response):
         """Process image response into BHWC tensor format"""
-        images = []
-        for img_data in response.image_response.images:
-            image_url = img_data.url
+        try:
+            images = []
+            for img_data in response.image_response.images:
+                image_url = img_data.url
+                
+                # Get image data
+                img_response = requests.get(image_url).content
+                img = PILImage.open(BytesIO(img_response)).convert("RGB")
+                
+                # Convert to numpy array with proper normalization
+                img_np = np.array(img).astype(np.float32) / 255.0
+                images.append(img_np)
             
-            # Get image data
-            img_response = requests.get(image_url).content
-            img = PILImage.open(BytesIO(img_response)).convert("RGB")
-            
-            # Convert to numpy array with proper normalization
-            img_np = np.array(img).astype(np.float32) / 255.0
-            images.append(img_np)
-        
-        # Stack into batch tensor [B, H, W, C]
-        img_batch = np.stack(images, axis=0)
-        return torch.from_numpy(img_batch)
+            # Stack into batch tensor [B, H, W, C]
+            img_batch = np.stack(images, axis=0)
+            return torch.from_numpy(img_batch)
+        except Exception as e:
+            return config_manager.handle_error(e, "Error processing image response")
     
     def process_video_response(self, response):
         """Process video response - return URLs"""
-        return [image.url for image in response.video_response.images]
+        try:
+            return [image.url for image in response.video_response.images]
+        except Exception as e:
+            return config_manager.handle_error(e, "Error processing video response")
     
     def download_video(self, url, output_dir=None):
         """
@@ -240,70 +267,56 @@ class LivepeerBase:
         Returns:
             str: Full path to downloaded video file
         """
-        # Determine ComfyUI output directory if not specified
-        if output_dir is None:
-            # Default ComfyUI output is in the 'output' folder at the project root
-            output_dir = os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')), 'output')
-            # Ensure 'livepeer' subfolder exists
-            output_dir = os.path.join(output_dir, 'livepeer')
-            os.makedirs(output_dir, exist_ok=True)
-        
-        # Generate unique filename using timestamp
-        import time
-        timestamp = int(time.time())
-        video_filename = f"livepeer_video_{timestamp}.mp4"
-        video_path = os.path.join(output_dir, video_filename)
-        
-        # Download the video
-        print(f"Downloading video from {url} to {video_path}")
-        response = requests.get(url, stream=True)
-        response.raise_for_status()
-        
-        with open(video_path, 'wb') as f:
-            shutil.copyfileobj(response.raw, f)
+        try:
+            # Use configured output directory if not specified
+            if output_dir is None:
+                output_dir = config_manager.get_output_path("videos")
             
-        return video_path
+            # Generate unique filename using timestamp
+            timestamp = int(time.time())
+            video_filename = f"livepeer_video_{timestamp}.mp4"
+            video_path = os.path.join(output_dir, video_filename)
+            
+            # Download the video
+            config_manager.log("info", f"Downloading video from {url} to {video_path}")
+            response = requests.get(url, stream=True)
+            response.raise_for_status()
+            
+            with open(video_path, 'wb') as f:
+                shutil.copyfileobj(response.raw, f)
+                
+            return video_path
+        except Exception as e:
+            return config_manager.handle_error(e, "Error downloading video")
     
     def prepare_image(self, image_batch):
         """
         Convert ComfyUI image tensor batch to file for API upload
-        For nodes that only support single image input, the caller should handle
-        processing batch elements separately
-        
-        Args:
-            image_batch: Tensor of shape [B,H,W,C] with one or more images
-            
-        Returns:
-            Image: Single Livepeer Image object from the first batch element
-            This is a limitation of the current Livepeer API which doesn't support
-            batch processing for image inputs
         """
-        # For now, we can only process one image at a time with the Livepeer API
-        # Future API versions might support batch processing
-        if image_batch.shape[0] > 1:
-            print(f"Warning: Livepeer API only supports one image at a time. Using first image from batch of {image_batch.shape[0]}")
-        
-        # Convert tensor to PIL Image for uploading
-        img = image_batch[0]  # First image in batch
-        pil_img = torch.clamp(img * 255, 0, 255).cpu().numpy().astype(np.uint8)
-        pil_img = PILImage.fromarray(pil_img)
-        
-        # Save to BytesIO for uploading
-        img_byte_arr = BytesIO()
-        pil_img.save(img_byte_arr, format='PNG')
-        img_byte_arr.seek(0)
-        
-        # Convert BytesIO to bytes for the Livepeer API
-        img_bytes = img_byte_arr.getvalue()
-        
-        # Create file-like object for the API using the correct Image class
-        return Image(
-            file_name="input_image.png",
-            content=img_bytes
-        ) 
-
-# --- Old Job Getter Node Logic Removed ---
-# The LivepeerJobGetter class has been moved and refactored into
-# livepeer_jobgetter.py with a base class and specific implementations.
-
-# --- End Removed Logic --- 
+        try:
+            # For now, we can only process one image at a time with the Livepeer API
+            # Future API versions might support batch processing
+            #TODO: review, decide if we risk handling batches here manually. Probably.
+            if image_batch.shape[0] > 1:
+                config_manager.log("warning", f"Livepeer API only supports one image at a time. Using first image from batch of {image_batch.shape[0]}")
+            
+            # Convert tensor to PIL Image for uploading
+            img = image_batch[0]  # First image in batch
+            pil_img = torch.clamp(img * 255, 0, 255).cpu().numpy().astype(np.uint8)
+            pil_img = PILImage.fromarray(pil_img)
+            
+            # Save to BytesIO for uploading
+            img_byte_arr = BytesIO()
+            pil_img.save(img_byte_arr, format='PNG')
+            img_byte_arr.seek(0)
+            
+            # Convert BytesIO to bytes for the Livepeer API
+            img_bytes = img_byte_arr.getvalue()
+            
+            # Create file-like object for the API using the correct Image class
+            return Image(
+                file_name="input_image.png",
+                content=img_bytes
+            )
+        except Exception as e:
+            return config_manager.handle_error(e, "Error preparing image") 
