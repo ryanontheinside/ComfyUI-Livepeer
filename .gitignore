@@ -1,11 +1,14 @@
+# Python cache files
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
+
+# Distribution / packaging
+dist/
 build/
 develop-eggs/
-dist/
 downloads/
 eggs/
 .eggs/
@@ -19,3 +22,30 @@ wheels/
 .installed.cfg
 *.egg
 .DS_Store
+
+# Logs
+logs/
+*.log
+
+# Configuration (may contain API keys)
+config.json
+
+# Downloaded media
+*.mp4
+*.mp3
+*.wav
+*.ogg
+*.flac
+
+# Environment
+.env
+.venv
+env/
+venv/
+ENV/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo

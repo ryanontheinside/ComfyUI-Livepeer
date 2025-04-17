@@ -1,7 +1,9 @@
-from .livepeer_core import LivepeerBase
+from ...src.livepeer_core import LivepeerBase
 import torch
 from livepeer_ai.models import components
+from ...config_manager import config_manager
 import traceback
+import uuid # Ensure uuid is imported
 
 class LivepeerUpscale(LivepeerBase):
     JOB_TYPE = "upscale" # Define job type for async tracking
@@ -10,6 +12,8 @@ class LivepeerUpscale(LivepeerBase):
     def INPUT_TYPES(s):
         # Get common inputs first
         common_inputs = s.get_common_inputs()
+        # Get default upscale model from config
+        default_model = config_manager.get_default_model("upscale") or "stabilityai/stable-diffusion-x4-upscaler"
         # Define node-specific inputs
         node_inputs = {
             "required": {
@@ -17,7 +21,7 @@ class LivepeerUpscale(LivepeerBase):
                 "prompt": ("STRING", {"multiline": True, "default": "Make this image high resolution"}), # Prompt seems required by BodyGenUpscale
             },
             "optional": {
-                 "model_id": ("STRING", {"multiline": False, "default": "stabilityai/stable-diffusion-x4-upscaler"}),
+                 "model_id": ("STRING", {"multiline": False, "default": default_model}),
                  "safety_check": ("BOOLEAN", {"default": True}),
                  "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}), # Use 0 for None/random
                  "num_inference_steps": ("INT", {"default": 75, "min": 1, "max": 150, "step": 1}),
@@ -29,15 +33,15 @@ class LivepeerUpscale(LivepeerBase):
         node_inputs["optional"].update(common_inputs)
         return node_inputs
 
-    RETURN_TYPES = ("IMAGE", "image_job") # Use specific type "image_job"
-    RETURN_NAMES = ("upscaled_image", "job_id")
+    RETURN_TYPES = ("image_job",) # Use specific type "image_job"
+    RETURN_NAMES = ("job_id",)
     FUNCTION = "upscale_image"
     CATEGORY = "Livepeer"
 
     def upscale_image(self, enabled, api_key, max_retries, retry_delay, run_async, synchronous_timeout, image, prompt, model_id="", safety_check=True, seed=0, num_inference_steps=75):
         # Skip API call if disabled
         if not enabled:
-            return (image, None)
+            return (None,)
 
         # Prepare the input image using the base class method
         livepeer_image = self.prepare_image(image)
@@ -61,31 +65,14 @@ class LivepeerUpscale(LivepeerBase):
         if run_async:
             # Trigger async job and return job ID
             job_id = self.trigger_async_job(api_key, max_retries, retry_delay, operation_func, self.JOB_TYPE)
-            # Return None for image, job_id for the string output
-            return (None, job_id)
+            return (job_id,)
         else:
             # Execute synchronously with retry logic
-            try:
-                response = self.execute_with_retry(api_key, max_retries, retry_delay, operation_func, synchronous_timeout=synchronous_timeout)
-
-                # Process the response to get the image tensor
-                # Assume response structure is similar to t2i/i2i
-                if hasattr(response, 'image_response') and response.image_response:
-                     upscaled_image_tensor = self.process_image_response(response)
-                     return (upscaled_image_tensor, None)
-                else:
-                    print(f"Error: Livepeer Upscale response missing image_response.")
-                    # Attempt to extract error from response if available
-                    error_msg = getattr(response, 'error', 'Unknown error')
-                    print(f"Livepeer Upscale Error: {error_msg}")
-                    # Return None for both outputs on error
-                    # Consider adding an error output string later if needed
-                    return (None, None)
-
-            except Exception as e:
-                 print(f"Error during Livepeer Upscale sync execution: {e}")
-                 traceback.print_exc()
-                 return (None, None)
+            response = self.execute_with_retry(api_key, max_retries, retry_delay, operation_func, synchronous_timeout=synchronous_timeout)
+            # Generate Job ID and store result directly for sync mode
+            job_id = str(uuid.uuid4())
+            self._store_sync_result(job_id, self.JOB_TYPE, response)
+            return (job_id,)
 
 NODE_CLASS_MAPPINGS = {
     "LivepeerUpscale": LivepeerUpscale,

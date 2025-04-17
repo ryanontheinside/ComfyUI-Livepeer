@@ -1,6 +1,8 @@
-from .livepeer_core import LivepeerBase
+from ...src.livepeer_core import LivepeerBase
 import torch
 from livepeer_ai.models import components
+from ...config_manager import config_manager
+import uuid # Ensure uuid is imported
 
 class LivepeerI2I(LivepeerBase):
     JOB_TYPE = "i2i" # Define job type for async tracking
@@ -9,6 +11,8 @@ class LivepeerI2I(LivepeerBase):
     def INPUT_TYPES(s):
         # Get common inputs first
         common_inputs = s.get_common_inputs()
+        # Get default I2I model from config
+        default_model = config_manager.get_default_model("I2I") or "timbrooks/instruct-pix2pix"
         # Define node-specific inputs
         node_inputs = {
             "required": {
@@ -17,7 +21,7 @@ class LivepeerI2I(LivepeerBase):
             },
             "optional": {
                 "negative_prompt": ("STRING", {"multiline": True, "default": ""}),
-                "model_id": ("STRING", {"multiline": False, "default": "timbrooks/instruct-pix2pix"}),
+                "model_id": ("STRING", {"multiline": False, "default": default_model}),
                 "loras": ("STRING", {"multiline": True, "default": ""}),
                 "strength": ("FLOAT", {"default": 0.8, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "guidance_scale": ("FLOAT", {"default": 7.5, "min": 0.0, "max": 20.0, "step": 0.1}),
@@ -34,22 +38,21 @@ class LivepeerI2I(LivepeerBase):
         node_inputs["optional"].update(common_inputs)
         return node_inputs
 
-    RETURN_TYPES = ("IMAGE", "image_job") # Use specific type "image_job"
-    RETURN_NAMES = ("image", "job_id")
+    RETURN_TYPES = ("image_job",) # Use specific type "image_job"
+    RETURN_NAMES = ("job_id",)
     FUNCTION = "image_to_image"
     CATEGORY = "Livepeer"
 
     def image_to_image(self, enabled, api_key, max_retries, retry_delay, run_async, synchronous_timeout, image, prompt, negative_prompt="", model_id="", loras="", strength=0.8, guidance_scale=7.5, image_guidance_scale=1.5, safety_check=True, seed=0, num_inference_steps=100, num_images_per_prompt=1):
         # Skip API call if disabled
         if not enabled:
-            return (image, None)
+            return (None,)
 
         # Prepare the input image using the base class method
         livepeer_image = self.prepare_image(image)
 
         # Prepare arguments for the Livepeer API call using all parameters
-        # Note: The SDK uses BodyGenImageToImage, which is effectively the params object here.
-        i2i_args = components.BodyGenImageToImage( # Changed from ImageToImageParams based on SDK file
+        i2i_args = components.BodyGenImageToImage( 
             image=livepeer_image,
             prompt=prompt,
             negative_prompt=negative_prompt if negative_prompt else None,
@@ -59,29 +62,26 @@ class LivepeerI2I(LivepeerBase):
             guidance_scale=guidance_scale,
             image_guidance_scale=image_guidance_scale,
             safety_check=safety_check,
-            seed=seed if seed != 0 else None, # Map 0 back to None
+            seed=seed if seed != 0 else None, 
             num_inference_steps=num_inference_steps,
             num_images_per_prompt=num_images_per_prompt
         )
 
         # Define the operation function for retry/async logic
         def operation_func(livepeer):
-            # Explicitly use livepeer.generate based on SDK structure
             return livepeer.generate.image_to_image(request=i2i_args)
 
         if run_async:
             # Trigger async job and return job ID
             job_id = self.trigger_async_job(api_key, max_retries, retry_delay, operation_func, self.JOB_TYPE)
-            # Return None for image, job_id for the string output
-            return (None, job_id)
+            return (job_id,)
         else:
             # Execute synchronously with retry logic
             response = self.execute_with_retry(api_key, max_retries, retry_delay, operation_func, synchronous_timeout=synchronous_timeout)
-
-            # Process the response to get the image tensor
-            image_tensor = self.process_image_response(response)
-            # Return image tensor, None for job_id
-            return (image_tensor, None)
+            # Generate Job ID and store result directly for sync mode
+            job_id = str(uuid.uuid4())
+            self._store_sync_result(job_id, self.JOB_TYPE, response)
+            return (job_id,)
 
 NODE_CLASS_MAPPINGS = {
     "LivepeerI2I": LivepeerI2I,
