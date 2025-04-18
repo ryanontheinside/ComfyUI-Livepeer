@@ -4,7 +4,7 @@ from ...src.livepeer_response_handler import LivepeerResponseHandler
 from ...config_manager import config_manager
 
 class LivepeerVideoJobGetter(LivepeerJobGetterBase):
-    EXPECTED_JOB_TYPES = ["i2v", "live2video"]  # Added live2video job type
+    EXPECTED_JOB_TYPES = ["i2v", "live2v"]  # Added live2v job type
     PROCESSED_RESULT_KEYS = [
         'processed_video_url', 
         'processed_video_path', 
@@ -21,6 +21,9 @@ class LivepeerVideoJobGetter(LivepeerJobGetterBase):
          },
          "optional": {
             "download_video": ("BOOLEAN", {"default": True})
+        },
+        "hidden": {
+            "unique_id": "UNIQUE_ID"  # Added hidden input
         }
     }
     @classmethod
@@ -91,9 +94,8 @@ class LivepeerVideoJobGetter(LivepeerJobGetterBase):
             config_manager.handle_error(e, f"Error in _process_raw_result (Video) for job {job_id}", raise_error=False)
             return None, None # Indicate failure
 
-    def get_video_job_result(self, job_id, download_video=True):
-        # Delegate to base class, passing extra arguments via kwargs
-        return self._get_or_process_job_result(job_id, download_video=download_video)
+    def get_video_job_result(self, job_id, unique_id):
+        return self._get_or_process_job_result(job_id=job_id, unique_id=unique_id)
 
 
 NODE_CLASS_MAPPINGS = {

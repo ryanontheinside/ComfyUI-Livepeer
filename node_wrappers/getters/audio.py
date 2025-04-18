@@ -16,6 +16,9 @@ class LivepeerAudioJobGetter(LivepeerJobGetterBase):
          },
          "optional": {
             "download_audio": ("BOOLEAN", {"default": True})
+        },
+        "hidden": {
+            "unique_id": "UNIQUE_ID"
         }
     }
     @classmethod
@@ -93,9 +96,8 @@ class LivepeerAudioJobGetter(LivepeerJobGetterBase):
             config_manager.handle_error(e, f"Error in _process_raw_result (Audio) for job {job_id}", raise_error=False)
             return None, None # Indicate failure
 
-    def get_audio_job_result(self, job_id, download_audio=True):
-        # Delegate to base class, passing extra arguments via kwargs
-        return self._get_or_process_job_result(job_id, download_audio=download_audio) 
+    def get_audio_job_result(self, job_id, unique_id):
+        return self._get_or_process_job_result(job_id=job_id, unique_id=unique_id)
 
 
 # Mappings for __init__.py

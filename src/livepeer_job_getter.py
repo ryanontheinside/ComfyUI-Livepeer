@@ -13,6 +13,11 @@ BLANK_IMAGE = torch.zeros((1, BLANK_HEIGHT, BLANK_WIDTH, 3), dtype=torch.float32
 _livepeer_job_store = {}
 _job_store_lock = threading.Lock()
 
+# --- This is specifically fro use in the IS_CHANGED method ---
+_node_instance_state = {}
+_node_state_lock = threading.Lock()
+# --------------------------------------------------
+
 class LivepeerJobGetterBase:
     """Base class for Livepeer Job Getter nodes."""
     CATEGORY = "Livepeer/Getters"
@@ -39,35 +44,63 @@ class LivepeerJobGetterBase:
 
     # INPUT_TYPES is defined in subclasses with specific job ID types
 
+    # --- IS_CHANGED using unique_id and _node_instance_state map ---
     @classmethod
-    def IS_CHANGED(s, job_id):
-        """Triggers re-execution if the job status changes or is in a non-terminal state."""
-        if not job_id:
-            return float("NaN") # Don't execute if no job_id
+    def IS_CHANGED(s, unique_id=None):
+        # We ignore the direct `job_id` argument as it will be None for linked inputs.
+        # We rely on the unique_id and the state map.
 
+        if unique_id is None:
+            # Cannot check state without unique_id, assume change.
+            return time.time() 
+
+        job_id_from_state = None
+        # Get the last known job_id for this node instance
+        with _node_state_lock:
+            instance_state = _node_instance_state.get(unique_id)
+            if instance_state:
+                job_id_from_state = instance_state.get("current_job_id")
+        
+        # If we don't have a job_id from state, assume change (initial run or error)
+        if not job_id_from_state or not isinstance(job_id_from_state, str):
+            config_manager.log("debug", f"IS_CHANGED({unique_id}): No valid job_id in state map. Returning time().")
+            return time.time()
+
+        # Now check the actual job store using the ID found in the state map
         with _job_store_lock:
-            job_info = _livepeer_job_store.get(job_id)
+            job_info = _livepeer_job_store.get(job_id_from_state)
             current_status = job_info.get('status', 'not_found') if job_info else 'not_found'
+            config_manager.log("debug", f"IS_CHANGED({unique_id}): Checking state map job_id '{job_id_from_state}'. Status in store: {current_status}")
 
-            # For terminal states, return a stable tuple
-            if current_status in ['delivered', 'failed', 'processing_error', 'type_mismatch', 'not_found']:
-                # Add processed keys check for delivered - if not processed yet, it might change
+            # Terminal states
+            if current_status in ['delivered', 'failed', 'processing_error', 'type_mismatch']:
                 if current_status == 'delivered':
                     processed = True
                     if job_info:
-                       # Use getattr to access class attribute within classmethod
-                       processed_keys = getattr(s, 'PROCESSED_RESULT_KEYS', []) 
-                       for key in processed_keys:
-                           if key not in job_info:
-                               processed = False
-                               break
-                    if not processed: # If delivered but not yet processed by getter, treat as non-terminal
-                         return (job_id, current_status, time.time())
-                # Otherwise, it's a stable terminal state
-                return (job_id, current_status)
-            # For non-terminal states (pending, completed_pending_delivery), return changing tuple
-            else:
-                return (job_id, current_status, time.time())
+                       processed_keys = getattr(s, 'PROCESSED_RESULT_KEYS', [])
+                       if processed_keys:
+                           for key in processed_keys:
+                               if key not in job_info:
+                                   processed = False
+                                   break
+                    else:
+                        processed = False
+                        
+                    if not processed:
+                        # Delivered but needs processing. Allow ONE extra run.
+                        config_manager.log("debug", f"IS_CHANGED({unique_id}): Job '{job_id_from_state}' delivered but needs processing. Returning time().")
+                        return time.time() 
+                
+                # Terminal state AND processed. Return stable value.
+                # Use the job_id from state as the stable identifier.
+                config_manager.log("debug", f"IS_CHANGED({unique_id}): Job '{job_id_from_state}' terminal ({current_status}) and processed. Returning stable: {job_id_from_state}")
+                return job_id_from_state
+            
+            # Non-terminal states (pending, completed_pending_delivery, not_found)
+            else: 
+                config_manager.log("debug", f"IS_CHANGED({unique_id}): Job '{job_id_from_state}' non-terminal ({current_status}). Returning time().")
+                return time.time()
+    # --- END IS_CHANGED --- 
 
     def _get_job_info(self, job_id):
         """Safely retrieves job information from the global store."""
@@ -143,8 +176,19 @@ class LivepeerJobGetterBase:
             # Clear tracker immediately after attempting cleanup, regardless of success.
             self._last_delivered_id = None
 
-    def _get_or_process_job_result(self, job_id, **kwargs):
+    def _get_or_process_job_result(self, job_id, unique_id=None, **kwargs):
         """Unified logic to get job status and either return stored/default result or process raw result."""
+        
+        # Update the node instance state map with the current job_id
+        if unique_id and job_id:
+            with _node_state_lock:
+                _node_instance_state[unique_id] = {"current_job_id": job_id}
+        elif unique_id:
+             # If job_id is None/empty, maybe clear state? Or leave old?
+             # Let's clear it for now to avoid IS_CHANGED using stale ID forever.
+             with _node_state_lock:
+                 if unique_id in _node_instance_state:
+                     _node_instance_state[unique_id]["current_job_id"] = None
 
         # 1. Cleanup previously delivered job if current job_id is different
         self._cleanup_supplanted_job(job_id)
@@ -221,7 +265,9 @@ class LivepeerJobGetterBase:
                  stored_results.append(job_info.get(key, default_map.get(key))) 
             
             self._last_delivered_id = job_id # Track successful retrieval
-            return tuple(stored_results) + (status, "Results previously delivered.")
+            result = tuple(stored_results) + (status, "Results previously delivered.")
+
+        return result
 
 # Export constants for use in other modules
 __all__ = ["LivepeerJobGetterBase", "BLANK_IMAGE", "BLANK_HEIGHT", "BLANK_WIDTH"] 

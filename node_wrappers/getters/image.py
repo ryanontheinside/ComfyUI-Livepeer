@@ -13,6 +13,10 @@ class LivepeerImageJobGetter(LivepeerJobGetterBase):
     INPUT_TYPES_DICT = {
         "required": {
              "job_id": ("image_job", {})
+         },
+         "hidden": {
+             "unique_id": "UNIQUE_ID", # Ensure unique_id is present
+             # Removed the previous custom hidden input
          }
     }
     @classmethod
@@ -48,9 +52,9 @@ class LivepeerImageJobGetter(LivepeerJobGetterBase):
             config_manager.handle_error(e, f"Error in _process_raw_result (Image) for job {job_id}", raise_error=False)
             return None, None # Indicate failure
 
-    def get_image_job_result(self, job_id):
-        # Delegate all logic to the base class handler
-        return self._get_or_process_job_result(job_id)
+    def get_image_job_result(self, job_id, unique_id):
+        # Delegate all logic to the base class handler, passing unique_id
+        return self._get_or_process_job_result(job_id=job_id, unique_id=unique_id)
 
 # Mappings for __init__.py
 NODE_CLASS_MAPPINGS = {
