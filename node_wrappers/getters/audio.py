@@ -1,4 +1,4 @@
-from ...src.livepeer_job_getter import LivepeerJobGetterBase
+import os
 from ...src.livepeer_job_getter import LivepeerJobGetterBase
 from ...src.livepeer_media_processor import LivepeerMediaProcessor
 from ...src.livepeer_response_handler import LivepeerResponseHandler
