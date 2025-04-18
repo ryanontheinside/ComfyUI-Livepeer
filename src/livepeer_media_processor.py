@@ -141,38 +141,106 @@ class LivepeerMediaProcessor:
             audio_data: ComfyUI audio format {'waveform': audio, 'sample_rate': ar}
             
         Returns:
-            tuple: (temp_file_path, file_bytes) or (None, None) if conversion fails
+            tuple: (temp_file_path, file_handle) or (None, None) if conversion fails
         """
         try:
             # Validate audio format
             if not isinstance(audio_data, dict) or 'waveform' not in audio_data or 'sample_rate' not in audio_data:
                 config_manager.log("error", "Invalid audio format. Expected {'waveform': audio_data, 'sample_rate': sample_rate}")
                 return None, None
-                
-            # Create a temporary file
-            temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-            temp_path = temp_file.name
-            temp_file.close()  # Close the file so we can write to it
+
+            # Create two temporary files - one for raw WAV, one for processed MP3
+            temp_dir = tempfile.mkdtemp()
+            temp_wav_path = os.path.join(temp_dir, "temp_audio.wav")
+            temp_mp3_path = os.path.join(temp_dir, "temp_audio.mp3")
             
             try:
                 # Extract audio data
                 waveform = audio_data['waveform']
                 sample_rate = audio_data['sample_rate']
                 
-                # Save as WAV file
-                sf.write(temp_path, waveform, sample_rate)
-                
-                # Read file as bytes for API
-                with open(temp_path, 'rb') as f:
-                    file_bytes = f.read()
+                # Process the waveform tensor to match what soundfile expects
+                if torch.is_tensor(waveform):
+                    # Move tensor to CPU if it's on another device
+                    waveform = waveform.cpu()
                     
-                return temp_path, file_bytes
+                    # Handle the 3D tensor format from ComfyUI [batch, channels, samples]
+                    if len(waveform.shape) == 3:
+                        # Take the first batch
+                        waveform = waveform[0]  # Now shape is [channels, samples]
+                        
+                        # Convert to numpy and transpose to [samples, channels] for soundfile
+                        waveform = waveform.numpy().T
+                    elif len(waveform.shape) == 2:
+                        # Assume shape is [channels, samples]
+                        waveform = waveform.numpy().T  # Transpose to [samples, channels]
+                    else:
+                        # Handle unexpected shape
+                        config_manager.log("warning", f"Unexpected waveform shape: {waveform.shape}. Expected 3D or 2D tensor.")
+                        waveform = waveform.numpy()
+                
+                # Ensure we have at least 1 second of audio data (pad with silence if needed)
+                min_samples = sample_rate
+                if waveform.shape[0] < min_samples:
+                    if len(waveform.shape) == 1:  # Mono
+                        padding = np.zeros(min_samples - waveform.shape[0], dtype=np.float32)
+                        waveform = np.concatenate([waveform, padding])
+                    else:  # Stereo or multi-channel
+                        padding = np.zeros((min_samples - waveform.shape[0], waveform.shape[1]), dtype=np.float32)
+                        waveform = np.concatenate([waveform, padding])
+                
+                # Save as intermediate WAV file
+                sf.write(temp_wav_path, waveform, sample_rate)
+                
+                # Convert to MP3 using FFmpeg (more universally compatible)
+                cmd = [
+                    "ffmpeg", "-y", 
+                    "-i", temp_wav_path,
+                    "-c:a", "libmp3lame",
+                    "-b:a", "192k",  # High quality
+                    "-ar", str(sample_rate),
+                    temp_mp3_path
+                ]
+                
+                # Run FFmpeg, capturing output to check for errors
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                if result.returncode != 0:
+                    raise RuntimeError(f"FFmpeg conversion failed: {result.stderr}")
+                
+                # Check if output file exists and has content
+                if not os.path.exists(temp_mp3_path) or os.path.getsize(temp_mp3_path) == 0:
+                    raise RuntimeError("FFmpeg produced an empty or missing output file")
+                
+                # Instead of reading the file as bytes, return the path and let the SDK handle it
+                # This avoids potential issues with how the multipart form data is constructed
+                
+                # Return path to the processed MP3 file
+                # IMPORTANT: Make sure we're returning a file with .mp3 extension to help the SDK determine content type
+                return temp_mp3_path, open(temp_mp3_path, 'rb')
                 
             except Exception as e:
+                error_msg = str(e)
+                config_manager.log("error", f"Error preparing audio: {error_msg}")
                 # Clean up if something goes wrong
-                if os.path.exists(temp_path):
-                    os.unlink(temp_path)
                 raise e
+                
+            finally:
+                # Clean up temporary files
+                try:
+                    if os.path.exists(temp_wav_path):
+                        os.unlink(temp_wav_path)
+                    if os.path.exists(temp_mp3_path) and not temp_mp3_path == temp_wav_path:
+                        # Don't delete the MP3 file yet if it's being returned
+                        if not temp_mp3_path == temp_wav_path:
+                            pass
+                    if os.path.exists(temp_dir):
+                        # Only try to remove the dir if it's empty (it might not be if we're returning the MP3)
+                        try:
+                            os.rmdir(temp_dir)
+                        except:
+                            pass
+                except Exception as cleanup_error:
+                    config_manager.log("warning", f"Error cleaning up temp files: {str(cleanup_error)}")
                 
         except Exception as e:
             config_manager.handle_error(e, "Error preparing audio from ComfyUI format", raise_error=False)
