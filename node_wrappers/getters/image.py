@@ -6,7 +6,7 @@ from ...config_manager import config_manager
 class LivepeerImageJobGetter(LivepeerJobGetterBase):
     # Expected job types that produce images
     EXPECTED_JOB_TYPES = ["t2i", "i2i", "upscale", "segment"] 
-    PROCESSED_RESULT_KEYS = ['processed_image'] # Key used to store the processed image tensor
+    PROCESSED_RESULT_KEYS = ['processed_image_output', 'processed_image_ready'] # Key used to store the processed image tensor
     DEFAULT_OUTPUTS = (BLANK_IMAGE, False) # image_output, image_ready
 
     # Define specific input type for image-related jobs
@@ -33,7 +33,13 @@ class LivepeerImageJobGetter(LivepeerJobGetterBase):
                 # Process the validated response
                 image_out = LivepeerMediaProcessor.process_image_response(response_obj)
                 image_ready = image_out is not None and image_out.shape[1] > BLANK_HEIGHT
-                return (image_out, image_ready), {'processed_image': image_out}
+                # Store the actual output values needed for caching
+                processed_data_to_store = {
+                    'processed_image_output': image_out,
+                    'processed_image_ready': image_ready
+                }
+                # Return the node-specific outputs tuple and the data to store
+                return (image_out, image_ready), processed_data_to_store
             else:
                 # If validation failed, return None
                 return None, None

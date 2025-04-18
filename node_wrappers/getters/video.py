@@ -5,7 +5,13 @@ from ...config_manager import config_manager
 
 class LivepeerVideoJobGetter(LivepeerJobGetterBase):
     EXPECTED_JOB_TYPES = ["i2v", "live2video"]  # Added live2video job type
-    PROCESSED_RESULT_KEYS = ['processed_url', 'processed_path', 'processed_frames', 'processed_audio'] # Keys used to store results
+    PROCESSED_RESULT_KEYS = [
+        'processed_video_url', 
+        'processed_video_path', 
+        'processed_frames', 
+        'processed_audio',
+        'processed_video_ready'
+    ] 
     DEFAULT_OUTPUTS = (None, None, None, None, False) # video_url, video_path, frames, audio, video_ready
 
     # Define specific input type for video jobs
@@ -67,12 +73,15 @@ class LivepeerVideoJobGetter(LivepeerJobGetterBase):
                         # Don't continue with processing if video loading failed
                         return None, None
                 
+                # Store the actual output values needed for caching
                 processed_data_to_store = {
-                         'processed_url': video_url_out, 
-                         'processed_path': video_path_out,
+                         'processed_video_url': video_url_out, 
+                         'processed_video_path': video_path_out,
                          'processed_frames': video_frames,
-                         'processed_audio': video_audio
+                         'processed_audio': video_audio,
+                         'processed_video_ready': video_ready # Store the boolean flag
                      }
+                # Return the node-specific outputs tuple and the data to store
                 return (video_url_out, video_path_out, video_frames, video_audio, video_ready), processed_data_to_store
             else:
                 # If validation failed, return None

@@ -4,7 +4,7 @@ from ...config_manager import config_manager
 
 class LivepeerTextJobGetter(LivepeerJobGetterBase):
     EXPECTED_JOB_TYPES = ["i2t", "llm", "a2t"]  # Added a2t job type for audio-to-text
-    PROCESSED_RESULT_KEYS = ['processed_text'] # Key used to store processed text
+    PROCESSED_RESULT_KEYS = ['processed_text_output', 'processed_text_ready'] 
     DEFAULT_OUTPUTS = ("", False) # text_output, text_ready
 
     # Define specific input type for text jobs
@@ -29,7 +29,13 @@ class LivepeerTextJobGetter(LivepeerJobGetterBase):
             
             if has_text_data and text_out:
                 text_ready = True
-                return (text_out, text_ready), {'processed_text': text_out}
+                # Store the actual output values needed for caching
+                processed_data_to_store = {
+                    'processed_text_output': text_out,
+                    'processed_text_ready': text_ready
+                }
+                # Return the node-specific outputs tuple and the data to store
+                return (text_out, text_ready), processed_data_to_store
             else:
                 return None, None
                 
