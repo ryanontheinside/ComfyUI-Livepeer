@@ -131,7 +131,8 @@ class LivepeerBase:
             
             config_manager.log("info", f"Livepeer Attempt {attempts + 1}/{max_retries}")
             result_container = {'result': None, 'error': None, 'done': False}
-            
+            cancelled_during_poll = False # Flag to track cancellation within the poll loop
+
             thread = threading.Thread(
                 target=self._run_operation_thread,
                 args=(api_key, operation_func, result_container),
@@ -148,13 +149,14 @@ class LivepeerBase:
                 try:
                     check_interrupt()
                 except comfy.model_management.InterruptProcessingException:
-                    # Mark the thread for termination
-                    timed_out = True
+                    # Handle cancellation detected DURING polling
                     last_error = comfy.model_management.InterruptProcessingException("Operation cancelled by user")
-                    config_manager.log("info", "Livepeer operation cancelled by user.")
-                    # Don't wait for thread to complete - allow ComfyUI to cancel
-                    break
-                
+                    config_manager.log("info", "Livepeer operation cancelled by user during poll.")
+                    # TODO: Pending Livepeer API cancellation support, send a cancellation request
+                    # to the server here to stop processing and free up GPU resources.
+                    cancelled_during_poll = True
+                    break # Exit polling loop
+
                 # Check for timeout
                 if time.time() - start_time > synchronous_timeout:
                     timed_out = True
@@ -165,26 +167,28 @@ class LivepeerBase:
                 # Yield control to allow UI updates and cancellation checks
                 time.sleep(0.1) 
 
-            # Check one more time after polling loop ends
+            # --- Processing after polling loop ---
+
+            # 1. Handle cancellation that occurred *during* the poll loop
+            if cancelled_during_poll:
+                 raise last_error # Propagate the stored exception
+
+            # 2. Check for cancellation that occurred *after* the poll loop finished
             try:
                 check_interrupt()
-            except comfy.model_management.InterruptProcessingException:
-                if not timed_out:  # Only set if not already set
-                    timed_out = True
-                    last_error = comfy.model_management.InterruptProcessingException("Operation cancelled by user")
-                    config_manager.log("info", "Livepeer operation cancelled by user.")
+            except comfy.model_management.InterruptProcessingException as e:
+                 # If interrupted here, just raise immediately. Don't proceed.
+                 config_manager.log("info", "Livepeer operation cancelled by user after polling loop.")
+                 raise e # Propagate immediately
 
-            # Handle result
+            # 3. Handle normal completion or timeout (only if not cancelled above)
             if not timed_out and result_container['done']:
-                thread.join(timeout=1.0) # Short timeout for join after done flag is set
+                 thread.join(timeout=1.0) # Short timeout for join after done flag is set
 
-            # Process result/error from this attempt
-            if timed_out and isinstance(last_error, comfy.model_management.InterruptProcessingException):
-                # If the interruption was requested by user, propagate the exception immediately
-                raise last_error
-            elif timed_out:
-                last_error = TimeoutError(f"Operation timed out after {synchronous_timeout} seconds")
-                attempts += 1 # Count timeout as a failed attempt
+            # 4. Process result/error from this attempt
+            if timed_out: # This now only reflects actual timeouts, not cancellations
+                 last_error = TimeoutError(f"Operation timed out after {synchronous_timeout} seconds")
+                 attempts += 1 # Count timeout as a failed attempt
             elif result_container['error']:
                 attempts += 1
                 last_error = result_container['error']

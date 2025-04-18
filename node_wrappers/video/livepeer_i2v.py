@@ -28,7 +28,6 @@ class LivepeerI2V(LivepeerBase):
                  "safety_check": ("BOOLEAN", {"default": True}),
                  "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}), 
                  "num_inference_steps": ("INT", {"default": 25, "min": 1, "max": 100, "step": 1}),
-                 # Removed download_video as it's handled by the getter now
              }
         }
         # Add common inputs into the 'optional' category
