@@ -81,6 +81,10 @@ class LivepeerBase:
         
     def _store_sync_result(self, job_id, job_type, result):
         """Stores synchronous operation result in the job store for retrieval by getter nodes."""
+
+        #NOTE: the choice to make sync results retrievable only by using the job getter is to handle 
+        # both syncronous and asyncronuous operations in ComfyUI - if the job is asyncrounous, 
+        # we cannot have the main node return some arbitrary result, like a blank image of arbitrary size
         global _livepeer_job_store, _job_store_lock
         
         with _job_store_lock:

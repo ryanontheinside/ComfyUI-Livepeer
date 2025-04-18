@@ -91,40 +91,56 @@ class LivepeerJobGetterBase:
                  
     def _handle_terminal_state(self, job_info, status, error):
         """Handles failed, processing_error, not_found, and type_mismatch states."""
+        job_id = job_info.get('job_id', 'N/A') # Get job_id for potential cleanup
+
         # Use self attributes directly
         if status == 'failed':
             error_msg = error or 'Unknown failure reason.'
-            config_manager.log("error", f"Livepeer Job Getter: Job {job_info.get('job_id', 'N/A')} failed: {error_msg}")
+            config_manager.log("error", f"Livepeer Job Getter: Job {job_id} failed: {error_msg}")
+            # --- Cleanup ---
+            with _job_store_lock:
+                _livepeer_job_store.pop(job_id, None)
+            # -------------
             return self.DEFAULT_OUTPUTS + (status, error_msg)
         elif status == 'processing_error':
             error_msg = error or 'Unknown processing error.'
-            config_manager.log("error", f"Livepeer Job Getter: Job {job_info.get('job_id', 'N/A')} had processing error: {error_msg}")
+            config_manager.log("error", f"Livepeer Job Getter: Job {job_id} had processing error: {error_msg}")
+            # --- Cleanup ---
+            # Error already stored by _update_job_store_processed, just remove now
+            with _job_store_lock:
+                _livepeer_job_store.pop(job_id, None)
+            # -------------
             return self.DEFAULT_OUTPUTS + (status, error_msg)
         elif status == 'not_found':
-            error_msg = error or f"Job ID {job_info.get('job_id', 'N/A')} not found."
+            error_msg = error or f"Job ID {job_id} not found."
+            # No cleanup needed, it's already gone
             return self.DEFAULT_OUTPUTS + (status, error_msg)
         elif status == 'type_mismatch':
             error_msg = error or f"Job type '{job_info.get('type')}' does not match expected types {self.EXPECTED_JOB_TYPES} for this getter."
             config_manager.log("warning", f"Livepeer Job Getter: {error_msg}")
+            # --- Cleanup ---
+            with _job_store_lock:
+                _livepeer_job_store.pop(job_id, None)
+            # -------------
             return self.DEFAULT_OUTPUTS + (status, error_msg)
         else: # Should not happen if IS_CHANGED works correctly
+            # No cleanup here as state is unknown
             return self.DEFAULT_OUTPUTS + (status, f"Unexpected terminal state '{status}'.")
 
     def _get_or_process_job_result(self, job_id, **kwargs):
         """Unified logic to get job status and either return stored/default result or process raw result."""
         job_info, status, error = self._get_job_info(job_id)
 
-        # 1. Handle Terminal States & Type Mismatch
+        # 1. Handle Terminal States & Type Mismatch (Cleanup handled inside _handle_terminal_state)
         if status in ['failed', 'processing_error', 'not_found']:
-            # Pass job_info which might be None if status is not_found initially
-            return self._handle_terminal_state(job_info if job_info else {}, status, error)
+            return self._handle_terminal_state(job_info if job_info else {'job_id': job_id}, status, error) # Pass job_id even if info is None
             
         # We can only check type if job_info is not None
         job_type = job_info.get('type')
         if job_type not in self.EXPECTED_JOB_TYPES:
             status = 'type_mismatch'
             error = f"Expected one of {self.EXPECTED_JOB_TYPES}, got '{job_type}'"
-            # Use _handle_terminal_state for consistency
+            # Use _handle_terminal_state for consistency (handles cleanup)
             return self._handle_terminal_state(job_info, status, error)
 
         # 2. Check if processing is needed
@@ -168,21 +184,30 @@ class LivepeerJobGetterBase:
             if processing_error_msg:
                 config_manager.log("error", f"Livepeer Job Getter: Error processing result for job {job_id}: {processing_error_msg}")
                 # Store the error encountered during processing
+                # NOTE: Status is set to 'processing_error' here, cleanup happens when _handle_terminal_state is called next time
                 self._update_job_store_processed(job_id, {'error': processing_error_msg}, status='processing_error')
                 return self.DEFAULT_OUTPUTS + ('processing_error', processing_error_msg)
             # Fallthrough error case (shouldn't happen if logic is correct)
             config_manager.log("error", f"Livepeer Job Getter: Unknown issue processing job {job_id}.")
+            # Treat as processing error for cleanup consistency
+            self._update_job_store_processed(job_id, {'error': f"Unknown processing issue for job {job_id}"}, status='processing_error')
             return self.DEFAULT_OUTPUTS + ('processing_error', f"Unknown processing issue for job {job_id}")
 
         # 4. Return already processed result (status == 'delivered' and not needs_processing)
-        elif status == 'delivered': 
+        elif status == 'delivered':
             config_manager.log("info", f"Livepeer Job Getter: Job {job_id} already processed. Returning stored result.")
             # Dynamically retrieve stored processed outputs based on PROCESSED_RESULT_KEYS
             stored_results = []
             # Map default outputs to keys for safer retrieval
-            default_map = dict(zip(self.PROCESSED_RESULT_KEYS, self.DEFAULT_OUTPUTS)) 
+            default_map = dict(zip(self.PROCESSED_RESULT_KEYS, self.DEFAULT_OUTPUTS))
             for key in self.PROCESSED_RESULT_KEYS:
                  stored_results.append(job_info.get(key, default_map.get(key))) # Use mapped default
+
+            # --- Cleanup ---
+            # Delivered state is terminal once processed data is retrieved
+            with _job_store_lock:
+                _livepeer_job_store.pop(job_id, None)
+            # -------------
             return tuple(stored_results) + (status, "Results previously delivered.")
             
         # 5. Handle pending status
