@@ -6,7 +6,7 @@ from ...config_manager import config_manager
 
 class LivepeerAudioJobGetter(LivepeerJobGetterBase):
     EXPECTED_JOB_TYPES = ["t2s"]  # Audio from text-to-speech
-    PROCESSED_RESULT_KEYS = ['processed_url', 'processed_path', 'processed_audio'] # Keys used to store results
+    PROCESSED_RESULT_KEYS = ['processed_audio_output', 'processed_audio_ready'] 
     DEFAULT_OUTPUTS = (None, False) # audio_output, audio_ready
 
     # Define specific input type for audio jobs
@@ -73,12 +73,17 @@ class LivepeerAudioJobGetter(LivepeerJobGetterBase):
                         error_msg = config_manager.handle_error(e, f"Error downloading audio for job {job_id}", raise_error=False)
                         config_manager.log("error", f"Failed to download audio: {error_msg}")
                         return None, None
+                else: # If download_audio is False
+                     audio_output = None # No tensor generated
+                     audio_ready = False # Not ready if not downloaded/loaded
                 
+                # Store the actual output values needed for caching
                 processed_data_to_store = {
-                        'processed_url': audio_url, 
-                        'processed_path': audio_path_out,
-                        'processed_audio': audio_output
+                        'processed_audio_output': audio_output, 
+                        'processed_audio_ready': audio_ready
+                        # We don't necessarily need to store url/path if not directly outputting them
                     }
+                # Return the node-specific outputs tuple and the data to store
                 return (audio_output, audio_ready), processed_data_to_store
             else:
                 # If validation failed, return None
@@ -90,7 +95,7 @@ class LivepeerAudioJobGetter(LivepeerJobGetterBase):
 
     def get_audio_job_result(self, job_id, download_audio=True):
         # Delegate to base class, passing extra arguments via kwargs
-        return self._get_or_process_job_result(job_id, download_audio=download_audio)
+        return self._get_or_process_job_result(job_id, download_audio=download_audio) 
 
 
 # Mappings for __init__.py

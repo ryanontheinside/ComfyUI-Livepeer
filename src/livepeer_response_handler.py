@@ -47,10 +47,6 @@ class LivepeerResponseHandler:
             if hasattr(raw_result, 'image_response') and raw_result.image_response:
                 return True, raw_result
         
-        # Fallback for any response with image_response
-        elif hasattr(raw_result, 'image_response') and raw_result.image_response:
-            config_manager.log("warning", f"Job {job_id} returned response type {type(raw_result).__name__} for job type {job_type}")
-            return True, raw_result
             
         # No valid image data found
         config_manager.log("error", f"Job {job_id} ({job_type}) has no valid image_response in its result. Response type: {type(raw_result).__name__}")
@@ -80,12 +76,7 @@ class LivepeerResponseHandler:
         elif job_type == "live2video" and isinstance(raw_result, GenLiveVideoToVideoResponse):
             if hasattr(raw_result, 'video_response') and raw_result.video_response:
                 return True, raw_result, video_urls
-        
-        # Fallback for any response with video_response
-        elif hasattr(raw_result, 'video_response') and raw_result.video_response:
-            config_manager.log("warning", f"Job {job_id} returned response type {type(raw_result).__name__} for job type {job_type}")
-            return True, raw_result, video_urls
-            
+
         # No valid video data found
         config_manager.log("error", f"Job {job_id} ({job_type}) has no valid video_response in its result. Response type: {type(raw_result).__name__}")
         return False, None, []
@@ -116,11 +107,7 @@ class LivepeerResponseHandler:
                 if hasattr(choice, 'message') and hasattr(choice.message, 'content'):
                     text_out = str(choice.message.content)
         
-        # Single fallback for string responses
-        elif isinstance(raw_result, str):
-            text_out = raw_result
-            config_manager.log("warning", f"Job {job_id} returned raw string instead of expected response object")
-            
+
         if text_out:
             return True, text_out
         else:
@@ -145,14 +132,7 @@ class LivepeerResponseHandler:
                     audio_url = raw_result.audio_response.audio.url
                     if audio_url:
                         return True, raw_result, audio_url
-        
-        # Fallback for any response with audio_response
-        elif hasattr(raw_result, 'audio_response'):
-            config_manager.log("warning", f"Job {job_id} returned response type {type(raw_result).__name__} for job type {job_type}")
-            if hasattr(raw_result.audio_response, 'audio') and hasattr(raw_result.audio_response.audio, 'url'):
-                audio_url = raw_result.audio_response.audio.url
-                if audio_url:
-                    return True, raw_result, audio_url
+
                 
         # No valid audio data found
         config_manager.log("error", f"Job {job_id} ({job_type}) has no valid audio_response in its result. Response type: {type(raw_result).__name__}")

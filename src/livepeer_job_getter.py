@@ -24,6 +24,10 @@ class LivepeerJobGetterBase:
     PROCESSED_RESULT_KEYS = [] # Must be overridden by subclass (list of keys like ['processed_image'])
     EXPECTED_JOB_TYPES = [] # Must be overridden by subclass
     
+    def __init__(self):
+        # Initialize instance variable to track the last successfully delivered job ID
+        self._last_delivered_id = None
+    
     def _process_raw_result(self, job_id, job_type, raw_result, **kwargs):
         """Processes the raw API result. Must be implemented by subclass.
            Should return a tuple of processed outputs (matching subclass RETURN_TYPES excluding base types)
@@ -127,98 +131,97 @@ class LivepeerJobGetterBase:
             # No cleanup here as state is unknown
             return self.DEFAULT_OUTPUTS + (status, f"Unexpected terminal state '{status}'.")
 
+    def _cleanup_supplanted_job(self, current_job_id):
+        """Checks if the job ID has changed and cleans up the previously delivered one."""
+        last_id = self._last_delivered_id
+        if current_job_id != last_id and last_id is not None:
+            with _job_store_lock:
+                last_job_info = _livepeer_job_store.get(last_id)
+                if last_job_info and last_job_info.get('status') == 'delivered':
+                    config_manager.log("info", f"Livepeer Job Getter: Cleaning up supplanted job {last_id} for node instance.")
+                    _livepeer_job_store.pop(last_id, None)
+            # Clear tracker immediately after attempting cleanup, regardless of success.
+            self._last_delivered_id = None
+
     def _get_or_process_job_result(self, job_id, **kwargs):
         """Unified logic to get job status and either return stored/default result or process raw result."""
+
+        # 1. Cleanup previously delivered job if current job_id is different
+        self._cleanup_supplanted_job(job_id)
+
+        # 2. Get current job info
         job_info, status, error = self._get_job_info(job_id)
 
-        # 1. Handle Terminal States & Type Mismatch (Cleanup handled inside _handle_terminal_state)
-        if status in ['failed', 'processing_error', 'not_found']:
-            return self._handle_terminal_state(job_info if job_info else {'job_id': job_id}, status, error) # Pass job_id even if info is None
-            
-        # We can only check type if job_info is not None
+        # 3. Handle terminal error states first
+        if status in ['not_found', 'failed', 'processing_error']:
+            # Pass job_id as fallback if job_info is None (for not_found)
+            return self._handle_terminal_state(job_info if job_info else {'job_id': job_id}, status, error)
+
+        # 4. Handle type mismatch (also terminal)
         job_type = job_info.get('type')
         if job_type not in self.EXPECTED_JOB_TYPES:
-            status = 'type_mismatch'
-            error = f"Expected one of {self.EXPECTED_JOB_TYPES}, got '{job_type}'"
-            # Use _handle_terminal_state for consistency (handles cleanup)
-            return self._handle_terminal_state(job_info, status, error)
+            mismatch_status = 'type_mismatch'
+            mismatch_error = f"Expected one of {self.EXPECTED_JOB_TYPES}, got '{job_type}'"
+            return self._handle_terminal_state(job_info, mismatch_status, mismatch_error)
 
-        # 2. Check if processing is needed
-        needs_processing = False
-        if status == 'completed_pending_delivery':
-            needs_processing = True
-        elif status == 'delivered':
-            # Check if all expected processed keys exist
-            if not all(key in job_info for key in self.PROCESSED_RESULT_KEYS):
-                needs_processing = True
-        
-        # 3. Process if needed
-        if needs_processing:
-            if status == 'delivered':
-                 config_manager.log("info", f"Livepeer Job Getter: Processing result for delivered sync job {job_id}.")
-            else: # completed_pending_delivery
-                 config_manager.log("info", f"Livepeer Job Getter: Job {job_id} ({job_type}) completed. Processing result.")
-                 
-            raw_result = job_info.get('result') 
-            processing_error_msg = None
-            processed_outputs = None
-            processed_data_to_store = None
-
-            try:
-                # Call subclass implementation for actual processing
-                processed_outputs, processed_data_to_store = self._process_raw_result(job_id, job_type, raw_result, **kwargs)
-                
-                if processed_outputs is not None and processed_data_to_store is not None:
-                    config_manager.log("info", f"Livepeer Job Getter: Job {job_id} processed successfully.")
-                    self._update_job_store_processed(job_id, processed_data_to_store, status='delivered')
-                    return processed_outputs + ('delivered', None)
-                else:
-                    # If _process_raw_result returned None, treat as failure
-                    processing_error_msg = f"Processing function failed for job {job_id} ({job_type})."
-
-            except Exception as e:
-                config_manager.handle_error(e, f"Error processing job {job_id}", raise_error=False)
-                processing_error_msg = f"Exception processing result for job {job_id}: {str(e)}"
-
-            # Handle processing failure
-            if processing_error_msg:
-                config_manager.log("error", f"Livepeer Job Getter: Error processing result for job {job_id}: {processing_error_msg}")
-                # Store the error encountered during processing
-                # NOTE: Status is set to 'processing_error' here, cleanup happens when _handle_terminal_state is called next time
-                self._update_job_store_processed(job_id, {'error': processing_error_msg}, status='processing_error')
-                return self.DEFAULT_OUTPUTS + ('processing_error', processing_error_msg)
-            # Fallthrough error case (shouldn't happen if logic is correct)
-            config_manager.log("error", f"Livepeer Job Getter: Unknown issue processing job {job_id}.")
-            # Treat as processing error for cleanup consistency
-            self._update_job_store_processed(job_id, {'error': f"Unknown processing issue for job {job_id}"}, status='processing_error')
-            return self.DEFAULT_OUTPUTS + ('processing_error', f"Unknown processing issue for job {job_id}")
-
-        # 4. Return already processed result (status == 'delivered' and not needs_processing)
-        elif status == 'delivered':
-            config_manager.log("info", f"Livepeer Job Getter: Job {job_id} already processed. Returning stored result.")
-            # Dynamically retrieve stored processed outputs based on PROCESSED_RESULT_KEYS
-            stored_results = []
-            # Map default outputs to keys for safer retrieval
-            default_map = dict(zip(self.PROCESSED_RESULT_KEYS, self.DEFAULT_OUTPUTS))
-            for key in self.PROCESSED_RESULT_KEYS:
-                 stored_results.append(job_info.get(key, default_map.get(key))) # Use mapped default
-
-            # --- Cleanup ---
-            # Delivered state is terminal once processed data is retrieved
-            with _job_store_lock:
-                _livepeer_job_store.pop(job_id, None)
-            # -------------
-            return tuple(stored_results) + (status, "Results previously delivered.")
-            
-        # 5. Handle pending status
-        elif status == 'pending':
+        # 5. Handle pending state
+        if status == 'pending':
             config_manager.log("info", f"Livepeer Job Getter: Job {job_id} ({job_type}) is still pending.")
             return self.DEFAULT_OUTPUTS + (status, "Job is pending.")
 
-        # 6. Catch-all for any unexpected status
+        # 6. Determine if processing is required for completed/delivered states
+        needs_processing = False
+        if status == 'completed_pending_delivery':
+            needs_processing = True
+            config_manager.log("info", f"Livepeer Job Getter: Job {job_id} ({job_type}) completed. Processing result.")
+        elif status == 'delivered':
+            if not all(key in job_info for key in self.PROCESSED_RESULT_KEYS):
+                needs_processing = True
+                config_manager.log("info", f"Livepeer Job Getter: Processing result for delivered sync job {job_id}.")
         else:
-            config_manager.log("warning", f"Livepeer Job Getter: Job {job_id} has unexpected status: {status}")
+            # Catch unexpected status before processing/cache logic
+            config_manager.log("warning", f"Livepeer Job Getter: Job {job_id} has unexpected status before processing/cache check: {status}")
             return self.DEFAULT_OUTPUTS + (status, f"Unexpected status '{status}'.")
+
+        # 7. Process or Retrieve Cached Result
+        if needs_processing:
+            # --- Attempt Processing --- 
+            raw_result = job_info.get('result') 
+            try:
+                processed_outputs, processed_data_to_store = self._process_raw_result(job_id, job_type, raw_result, **kwargs)
+                
+                if processed_outputs is not None and processed_data_to_store is not None:
+                    # Processing successful
+                    self._update_job_store_processed(job_id, processed_data_to_store, status='delivered')
+                    self._last_delivered_id = job_id # Track success
+                    config_manager.log("info", f"Livepeer Job Getter: Job {job_id} processed successfully.")
+                    return processed_outputs + ('delivered', None)
+                else:
+                    # Processing function indicated failure (returned None)
+                    error_msg = f"Processing function failed for job {job_id} ({job_type})."
+                    config_manager.log("error", f"Livepeer Job Getter: {error_msg}")
+                    self._update_job_store_processed(job_id, {'error': error_msg}, status='processing_error')
+                    return self.DEFAULT_OUTPUTS + ('processing_error', error_msg)
+
+            except Exception as e:
+                # Exception during processing
+                config_manager.handle_error(e, f"Error processing job {job_id}", raise_error=False)
+                processing_error_msg = f"Exception processing result for job {job_id}: {str(e)}"
+                config_manager.log("error", f"Livepeer Job Getter: {processing_error_msg}")
+                self._update_job_store_processed(job_id, {'error': processing_error_msg}, status='processing_error')
+                return self.DEFAULT_OUTPUTS + ('processing_error', processing_error_msg)
+            # --- End Processing --- 
+
+        else: 
+            # Retrieve from Cache (status == 'delivered' and keys are present)
+            config_manager.log("info", f"Livepeer Job Getter: Job {job_id} already processed. Returning stored result.")
+            stored_results = []
+            default_map = dict(zip(self.PROCESSED_RESULT_KEYS, self.DEFAULT_OUTPUTS))
+            for key in self.PROCESSED_RESULT_KEYS:
+                 stored_results.append(job_info.get(key, default_map.get(key))) 
+            
+            self._last_delivered_id = job_id # Track successful retrieval
+            return tuple(stored_results) + (status, "Results previously delivered.")
 
 # Export constants for use in other modules
 __all__ = ["LivepeerJobGetterBase", "BLANK_IMAGE", "BLANK_HEIGHT", "BLANK_WIDTH"] 
