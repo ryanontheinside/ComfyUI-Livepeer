@@ -13,6 +13,22 @@ BLANK_IMAGE = torch.zeros((1, BLANK_HEIGHT, BLANK_WIDTH, 3), dtype=torch.float32
 _livepeer_job_store = {}
 _job_store_lock = threading.Lock()
 
+# NOTE:
+# PROBLEMS WITH IS_CHANGED WORK AROUND
+
+# Risk: State Desynchronization on Error/Interruption
+# Problem: _node_instance_state gets updated at the start of the main function. If an error occurs after this update but before successful completion, IS_CHANGED might incorrectly think the state is stable on the next run.
+# Mitigation: Move the update of _node_instance_state to the very end of the _get_or_process_job_result function, just before returning. This ensures the state map only reflects the job_id that was fully handled (processed, cached, error handled, or confirmed pending) in that execution.
+# Implementation: Modify _get_or_process_job_result.
+# Risk: Stale State with Dynamic Workflow Changes
+# Problem: If the input job_id changes but the main function doesn't run immediately, IS_CHANGED might use the old job_id from the state map.
+# Mitigation/Analysis: This is harder to fully eliminate with this pattern. However, ComfyUI's core execution engine does track changes to input links. If the upstream node produces a new job_id value, the executor should eventually mark this getter node for execution even if our IS_CHANGED initially returns a stale stable value. Our current IS_CHANGED logic (returning time.time() if the state map is empty or the job is pending) ensures the node will run when a new job_id is encountered for the first time by that instance. The main function then updates the state map correctly. The risk is relatively low and mainly concerns a potential one-cycle delay in reacting to an input change if IS_CHANGED happens to run with stale state just before the executor recognizes the input change. For most polling scenarios, this is likely acceptable. No code change needed here beyond what's done for Risk 1.
+# Risk: Memory Usage (_node_instance_state Growth)
+# Problem: The _node_instance_state map grows indefinitely as new node instances are created or process different jobs.
+# Mitigation: The cleanest solution is often to use a Least Recently Used (LRU) cache with a fixed size instead of a plain dictionary. This automatically discards old entries. Implementing a full LRU cache might add complexity or dependencies. A simpler approach for now is to acknowledge the issue. We can add a comment recommending replacing the dict with an LRU cache later if memory usage becomes a concern. No immediate code change, but noted for future improvement.
+
+
+
 # --- This is specifically fro use in the IS_CHANGED method ---
 _node_instance_state = {}
 _node_state_lock = threading.Lock()
