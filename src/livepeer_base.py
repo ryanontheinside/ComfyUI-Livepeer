@@ -37,6 +37,7 @@ class LivepeerBase:
             "run_async": ("BOOLEAN", {"default": False}), 
             "synchronous_timeout": ("FLOAT", {"default": default_timeout, "min": 5.0, "max": 600.0, "tooltip": "Timeout for synchronous operations (per retry). For async operations, this is ignored."}),
         }
+    #TODO change to simply timeout for both
     
     def _execute_livepeer_operation(self, api_key, max_retries, retry_delay, operation_func, job_id, job_type):
         """Internal method to run the operation and update the job store."""
