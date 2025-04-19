@@ -62,7 +62,7 @@ class LivepeerJobGetterBase:
 
     # --- IS_CHANGED using unique_id and _node_instance_state map ---
     @classmethod
-    def IS_CHANGED(s, unique_id=None):
+    def IS_CHANGED(s, unique_id=None, **kwargs):
         # We ignore the direct `job_id` argument as it will be None for linked inputs.
         # We rely on the unique_id and the state map.
 
