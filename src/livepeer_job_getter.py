@@ -139,15 +139,20 @@ class LivepeerJobGetterBase:
             tuple: Node outputs including both processed data and status information
         """
         # Update our state map with current job
+        # use __class__ so that each sub of JobGetterBase has its own state map
         cls = self.__class__
         state_map = cls._get_instance_map()
         
+        # Check if this job_id is already associated with a different unique_id
         if unique_id and job_id:
+            for existing_id, state in state_map.items():
+                if state.get('job_id') == job_id and existing_id != unique_id:
+                    return self.DEFAULT_OUTPUTS + ('error', f'Job {job_id} is already associated with another getter node. There can only be one job getter per request node.')
+            
             state_map[unique_id] = {'job_id': job_id}
         
-        # No job ID provided
-        if not job_id:
-            return self.DEFAULT_OUTPUTS + ('not_found', 'No job ID provided')
+        else:
+            return self.DEFAULT_OUTPUTS + ('not_found', 'Either no job ID or no unique ID provided')
         
         # Get job data from service
         job_data = livepeer_service.get_job_data(job_id, node_unique_id=unique_id)
