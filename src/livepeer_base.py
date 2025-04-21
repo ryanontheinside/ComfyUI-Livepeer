@@ -68,7 +68,7 @@ class LivepeerBase:
         job_id = str(uuid.uuid4())
 
         # Register job with service
-        livepeer_service.register_job(job_id, job_type, api_key=None, is_sync=False)
+        livepeer_service.register_job(job_id, job_type, is_sync=False)
         
         config_manager.log("info", f"Livepeer Async Job {job_id} ({job_type}): Triggered.")
 

@@ -5,10 +5,10 @@ This document explains the architecture of the Livepeer ComfyUI integration, par
 ## Key Components
 
 ### LivepeerJobService
-- **Purpose**: Centralized service for managing the lifecycle of all Livepeer jobs
+- **Purpose**: Centralized service for managing the lifecycle and state of all Livepeer jobs
 - **Responsibilities**:
   - Job registration and tracking
-  - Background polling for job status
+  - State management and result storage
   - Node association tracking
   - Automatic cleanup of completed jobs
   - Thread-safe job data access
@@ -17,6 +17,7 @@ This document explains the architecture of the Livepeer ComfyUI integration, par
 - **Purpose**: Base class for all Livepeer requester nodes
 - **Responsibilities**:
   - Handling API request execution with retry logic
+  - Remote API polling for job status
   - Registering new jobs with the service
   - Managing synchronous and asynchronous job execution
   - Error handling and response processing
@@ -31,11 +32,11 @@ This document explains the architecture of the Livepeer ComfyUI integration, par
 
 ## Data Flow
 
-1. **Job Creation**:
+1. **Job Creation & Polling**:
    - User initiates a Livepeer operation through a requester node
    - LivepeerBase registers the job with LivepeerJobService
-   - For async jobs, a background thread begins polling
-   - For sync jobs, the result is stored immediately
+   - For async jobs, LivepeerBase starts a background thread for remote API polling
+   - For sync jobs, the result is stored immediately in the service
 
 2. **Job Status Check**:
    - Getter nodes track which job they're associated with
@@ -44,13 +45,33 @@ This document explains the architecture of the Livepeer ComfyUI integration, par
    - Returns stable value (job_id) for completed jobs
 
 3. **Result Processing**:
-   - When a job completes, the getter node processes the raw result
+   - LivepeerBase updates the service when a job completes
+   - When a getter node executes, it processes the raw result
    - Processed results are stored in the service
    - Subsequent executions retrieve cached results
 
 4. **Cleanup**:
    - When nodes are deleted, they remove their association with jobs
    - The service automatically cleans up jobs that are no longer used
+
+## Key Benefits
+
+- **Clear Separation of Concerns**:
+  - LivepeerBase handles API communication and polling
+  - LivepeerJobService manages local state and lifecycle
+  - LivepeerJobGetterBase focuses on processing results
+
+- **Resource Efficiency**:
+  - One polling thread per job regardless of how many getter nodes use it
+  - Automatic cleanup of completed jobs
+
+- **Simplified Node Code**:
+  - Nodes focus on their specific processing logic
+  - Common functionality abstracted into base classes
+
+- **Robust Error Handling**:
+  - Centralized error tracking and reporting
+  - Clear state management between components
 
 ## Architecture Diagram
 
@@ -59,13 +80,15 @@ This document explains the architecture of the Livepeer ComfyUI integration, par
 │                   │   Register Job  │                    │
 │  LivepeerBase     ├────────────────►│  LivepeerJobService│
 │  (Requester Nodes)│                 │    (Singleton)     │
-└───────────────────┘                 │                    │
-                                      │  ┌─────────────┐   │
-┌───────────────────┐  Query Status   │  │ Job Store   │   │
-│                   │◄────────────────┤  └─────────────┘   │
+│                   │                 │                    │
+│  • API Polling    │  Update Status  │  • State Storage   │
+│  • Job Execution  ├────────────────►│  • Node Tracking   │
+└───────────────────┘                 │  • Cleanup         │
+                                      │                    │
+┌───────────────────┐  Query Status   │                    │
+│                   │◄────────────────┤                    │
 │ LivepeerJobGetter │                 │                    │
-│  (Getter Nodes)   ├────────────────►│  ┌─────────────┐   │
-│                   │ Process Results │  │Polling Threads   │
-└───────────────────┘                 │  └─────────────┘   │
-                                      └────────────────────┘
+│  (Getter Nodes)   ├────────────────►│                    │
+│                   │ Process Results │                    │
+└───────────────────┘                 └────────────────────┘
 ``` 
