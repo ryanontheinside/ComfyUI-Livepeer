@@ -53,8 +53,8 @@ class LivepeerImageJobGetter(LivepeerJobGetterBase):
             return None, None # Indicate failure
 
     def get_image_job_result(self, job_id, unique_id):
-        # Delegate all logic to the base class handler, passing unique_id
-        return self._get_or_process_job_result(job_id=job_id, unique_id=unique_id)
+        # Use the new execute method directly instead of _get_or_process_job_result
+        return self.execute(job_id=job_id, unique_id=unique_id)
 
 # Mappings for __init__.py
 NODE_CLASS_MAPPINGS = {
