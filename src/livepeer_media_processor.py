@@ -470,11 +470,11 @@ class LivepeerMediaProcessor:
                 
                 # Return video info
                 return {
-                    'frames': tensor,                   # Tensor in BHWC format
-                    'fps': fps,                         # Original FPS
-                    'frame_count': len(frames),         # Actual frames extracted
-                    'duration': frame_count / fps,      # Duration in seconds
-                    'audio': audio_data                 # Audio data in ComfyUI format (or None)
+                    'frames': tensor,                   
+                    'fps': fps,                         
+                    'frame_count': len(frames),         
+                    'duration': frame_count / fps,      
+                    'audio': audio_data                 
                 }
             else:
                 config_manager.log("error", f"No frames could be extracted from {video_path}")
