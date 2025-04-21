@@ -70,23 +70,6 @@ for root, dirs, files in os.walk(NODE_WRAPPER_DIR):
             log.debug(f"Attempting to load nodes from: {module_path_rel}")
             load_nodes(module_path_rel, module_name)
 
-# For backward compatibility, also try to load the batch nodes
-try:
-    import importlib.util
-    batch_iterator_path = os.path.join(EXTENSION_ROOT, "batch_iterator.py")
-    batch_info_path = os.path.join(EXTENSION_ROOT, "batch_info.py")
-    
-    # Check if these files still exist (they might have been moved to node_wrappers)
-    if os.path.exists(batch_iterator_path):
-        module_name = "batch_iterator"
-        load_nodes(f".{module_name}", module_name)
-    
-    if os.path.exists(batch_info_path):
-        module_name = "batch_info"
-        load_nodes(f".{module_name}", module_name)
-except Exception as e:
-    log.warning(f"Error loading batch utilities: {e}")
-
 # Clean up sys.path by removing the extension root
 try:
     sys.path.remove(EXTENSION_ROOT)
