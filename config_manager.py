@@ -30,7 +30,7 @@ DEFAULT_CONFIG = {
         "I2T": "Salesforce/blip-image-captioning-large",
         "I2V": "stabilityai/stable-video-diffusion-img2vid-xt-1-1",
         "segment": "facebook/sam2-hiera-large",
-        "T2I": "SG161222/RealVisXL_V4.0_Lightning",
+        "T2I": "ByteDance/SDXL-Lightning",
         "T2S": "parler-tts/parler-tts-large-v1",
         "T2V": "stabilityai/stable-video-diffusion-img2vid-xt",
         "upscale": "stabilityai/stable-diffusion-x4-upscaler"
