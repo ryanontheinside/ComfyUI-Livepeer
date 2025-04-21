@@ -10,7 +10,20 @@ BLANK_WIDTH = 64
 BLANK_IMAGE = torch.zeros((1, BLANK_HEIGHT, BLANK_WIDTH, 3), dtype=torch.float32)
 
 class LivepeerJobGetterBase:
-    """Base class for Livepeer Job Getter nodes using centralized service."""
+    """
+    Base class for Livepeer Job Getter nodes using the centralized job service.
+    
+    This class provides the framework for ComfyUI nodes that retrieve and process
+    results from Livepeer API jobs. It handles:
+    
+    1. Job status checking and monitoring
+    2. Processing of raw API results into ComfyUI-compatible formats
+    3. Caching of processed results for efficiency
+    4. Node instance tracking and resource management
+    
+    Each specific getter type (image, video, audio, etc.) should subclass this
+    and implement the _process_raw_result method to handle type-specific processing.
+    """
     CATEGORY = "Livepeer/Getters"
     RETURN_TYPES = ("STRING", "STRING") # Common outputs
     RETURN_NAMES = ("job_status", "error_message")
@@ -22,23 +35,60 @@ class LivepeerJobGetterBase:
     
     @classmethod
     def _get_instance_map(cls):
-        """Get or create class state map for tracking node instances"""
+        """
+        Get or create class state map for tracking node instances
+        
+        Each getter node class maintains its own map of instances to track
+        which node instances are working with which jobs. This allows proper
+        resource cleanup and IS_CHANGED optimization.
+        
+        Returns:
+            dict: The class state map
+        """
         if not hasattr(cls, '_state_map'):
             cls._state_map = {}
         return cls._state_map
     
     def _process_raw_result(self, job_id, job_type, raw_result, **kwargs):
-        """Processes the raw API result. Must be implemented by subclass.
-           Should return a tuple of processed outputs (matching subclass RETURN_TYPES excluding base types)
-           and a dictionary of data to store (e.g., {'processed_image': image_tensor}).
-           Returns (None, None) on processing failure.
+        """
+        Processes the raw API result. Must be implemented by subclass.
+        
+        This method is responsible for converting raw API responses into
+        ComfyUI-compatible formats (tensors, etc.) appropriate for the getter type.
+        
+        Args:
+            job_id: ID of the job being processed
+            job_type: Type of the job (t2i, i2i, etc.)
+            raw_result: Raw API response data
+            **kwargs: Additional parameters from the node execution
+            
+        Returns:
+            tuple: (processed_outputs, processed_data_to_store)
+                - processed_outputs is a tuple matching node's return types (without status/error)
+                - processed_data_to_store is a dict of data to cache in the service
+            
+            Returns (None, None) on processing failure.
         """
         raise NotImplementedError("Subclasses must implement _process_raw_result")
     
-    # --- Simplified IS_CHANGED implementation using service ---
+    # --- IS_CHANGED implementation using service ---
     @classmethod
     def IS_CHANGED(cls, unique_id=None, **kwargs):
-        """Simplified IS_CHANGED implementation using service"""
+        """
+        Determines when the node should re-execute based on job status
+        
+        This is a critical method for ComfyUI's execution model. It:
+        1. Returns a dynamic value (time.time()) to trigger execution for pending jobs
+        2. Returns a stable value (job_id) to prevent re-execution for completed jobs
+        
+        Args:
+            unique_id: Unique identifier for the node instance
+            **kwargs: Additional parameters (unused)
+            
+        Returns:
+            dynamic value (time.time()): For pending/processing jobs to trigger execution
+            stable value (job_id): For completed jobs to prevent re-execution
+        """
         # Cannot check state without unique_id, assume change
         if not unique_id:
             return time.time()
@@ -70,7 +120,24 @@ class LivepeerJobGetterBase:
         return time.time()
     
     def execute(self, job_id, unique_id=None, **kwargs):
-        """Main execution method for getter nodes"""
+        """
+        Main execution method for getter nodes
+        
+        This is the core method that handles:
+        1. Tracking which job is associated with this node instance
+        2. Retrieving job data from the service
+        3. Processing raw results as needed
+        4. Handling error states properly
+        5. Returning appropriate outputs based on job state
+        
+        Args:
+            job_id: ID of the job to get results for
+            unique_id: Unique identifier for this node instance
+            **kwargs: Additional parameters for processing
+            
+        Returns:
+            tuple: Node outputs including both processed data and status information
+        """
         # Update our state map with current job
         cls = self.__class__
         state_map = cls._get_instance_map()
@@ -157,9 +224,23 @@ class LivepeerJobGetterBase:
         # Fallback for unexpected status
         return self.DEFAULT_OUTPUTS + (job_data['status'], 'Unexpected state')
     
+    def _get_or_process_job_result(self, job_id, unique_id=None, **kwargs):
+        """
+        Legacy wrapper for compatibility with existing getter nodes
+        
+        This method is maintained for backward compatibility with existing
+        node implementations. New implementations should use execute() directly.
+        """
+        return self.execute(job_id, unique_id, **kwargs)
     
     def __del__(self):
-        """Clean up on node deletion"""
+        """
+        Clean up on node deletion
+        
+        This is called when a node instance is garbage collected.
+        It removes the node's association with jobs in the service,
+        allowing them to be cleaned up when no longer needed.
+        """
         cls = self.__class__
         state_map = cls._get_instance_map()
         
