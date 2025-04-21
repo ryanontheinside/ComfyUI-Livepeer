@@ -45,7 +45,7 @@ class LivepeerTextJobGetter(LivepeerJobGetterBase):
             return None, None
 
     def get_text_job_result(self, job_id, unique_id):
-        return self._get_or_process_job_result(job_id=job_id, unique_id=unique_id)
+        return self.execute(job_id=job_id, unique_id=unique_id)
 
 NODE_CLASS_MAPPINGS = {
     "LivepeerTextJobGetter": LivepeerTextJobGetter,
