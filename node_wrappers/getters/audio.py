@@ -98,7 +98,7 @@ class LivepeerAudioJobGetter(LivepeerJobGetterBase):
 
     def get_audio_job_result(self, job_id, unique_id, download_audio=True):
         # Pass job_id, unique_id, and download_audio (via kwargs) to base method
-        return self._get_or_process_job_result(job_id=job_id, unique_id=unique_id, download_audio=download_audio)
+        return self.execute(job_id=job_id, unique_id=unique_id, download_audio=download_audio)
 
 
 # Mappings for __init__.py
