@@ -1,12 +1,7 @@
 # Livepeer API Testing
 
-This directory contains a test script for validating Livepeer API endpoints. The script is useful for identifying if your API key is working and if the Livepeer service endpoints are accessible.
+This directory contains a test script for validating Livepeer API endpoints. These scripts are WIP
 
-## Prerequisites
-
-- Python 3.7+
-- `livepeer-ai` Python package installed
-- A valid Livepeer API key in your `config.json` file
 
 ## Running Tests
 
