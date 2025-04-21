@@ -7,7 +7,7 @@ import sys
 
 # Default configuration settings
 DEFAULT_CONFIG = {
-    "api_key": "17101937-98f4-4c99-bdb2-e6499fda7ef8",  # Default API key
+    "api_key": "YOUR_LIVEPEER_API_KEY",  # Default API key
     "log_level": "INFO",  # Default log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
     "error_handling": {
         "throw_errors": True,  # Whether to throw errors or just log them

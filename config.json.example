@@ -1,0 +1,22 @@
+{
+    "api_key": "YOUR_LIVEPEER_API_KEY",
+    "log_level": "DEBUG",
+    "error_handling": {
+        "throw_errors": true,
+        "max_error_logs": 10,
+        "log_errors_to_file": true
+    },
+    "output_paths": {
+        "images": "output/livepeer/images",
+        "videos": "output/livepeer/videos",
+        "audio": "output/livepeer/audio"
+    },
+    "default_retry_settings": {
+        "max_retries": 1,
+        "retry_delay": 2.0
+    },
+    "default_timeout": 120.0,
+    "default_models": {
+        "A2T": "openai/whisper-large-v3"
+    }
+} 
