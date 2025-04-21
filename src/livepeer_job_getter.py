@@ -27,13 +27,6 @@ _job_store_lock = threading.Lock()
 # Problem: The _node_instance_state map grows indefinitely as new node instances are created or process different jobs.
 # Mitigation: The cleanest solution is often to use a Least Recently Used (LRU) cache with a fixed size instead of a plain dictionary. This automatically discards old entries. Implementing a full LRU cache might add complexity or dependencies. A simpler approach for now is to acknowledge the issue. We can add a comment recommending replacing the dict with an LRU cache later if memory usage becomes a concern. No immediate code change, but noted for future improvement.
 
-
-
-# --- This is specifically fro use in the IS_CHANGED method ---
-_node_instance_state = {}
-_node_state_lock = threading.Lock()
-# --------------------------------------------------
-
 class LivepeerJobGetterBase:
     """Base class for Livepeer Job Getter nodes."""
     CATEGORY = "Livepeer/Getters"
@@ -60,63 +53,45 @@ class LivepeerJobGetterBase:
 
     # INPUT_TYPES is defined in subclasses with specific job ID types
 
-    # --- IS_CHANGED using unique_id and _node_instance_state map ---
+    # --- Simplified IS_CHANGED - always run check_lazy_status ---
     @classmethod
-    def IS_CHANGED(s, unique_id=None, **kwargs):
-        # We ignore the direct `job_id` argument as it will be None for linked inputs.
-        # We rely on the unique_id and the state map.
-
-        if unique_id is None:
-            # Cannot check state without unique_id, assume change.
-            return time.time() 
-
-        job_id_from_state = None
-        # Get the last known job_id for this node instance
-        with _node_state_lock:
-            instance_state = _node_instance_state.get(unique_id)
-            if instance_state:
-                job_id_from_state = instance_state.get("current_job_id")
+    def IS_CHANGED(cls, **kwargs):
+        # Always mark the node for potential execution
+        # check_lazy_status will control whether it actually runs
+        return time.time()
+    
+    # --- check_lazy_status implementation for controlling execution ---
+    def check_lazy_status(self, job_id=None, **kwargs):
+        """Controls execution based on job status.
         
-        # If we don't have a job_id from state, assume change (initial run or error)
-        if not job_id_from_state or not isinstance(job_id_from_state, str):
-            config_manager.log("debug", f"IS_CHANGED({unique_id}): No valid job_id in state map. Returning time().")
-            return time.time()
-
-        # Now check the actual job store using the ID found in the state map
+        If job_id is None, request it.
+        If job is pending, ALLOW execution by returning empty list.
+        If job is in terminal state, PREVENT execution by returning ["job_id"].
+        """
+        # First run or job_id not provided yet - request it
+        if job_id is None:
+            return ["job_id"]
+        
+        # We have a job_id, check its status
         with _job_store_lock:
-            job_info = _livepeer_job_store.get(job_id_from_state)
-            current_status = job_info.get('status', 'not_found') if job_info else 'not_found'
-            config_manager.log("debug", f"IS_CHANGED({unique_id}): Checking state map job_id '{job_id_from_state}'. Status in store: {current_status}")
-
-            # Terminal states
-            if current_status in ['delivered', 'failed', 'processing_error', 'type_mismatch']:
-                if current_status == 'delivered':
-                    processed = True
-                    if job_info:
-                       processed_keys = getattr(s, 'PROCESSED_RESULT_KEYS', [])
-                       if processed_keys:
-                           for key in processed_keys:
-                               if key not in job_info:
-                                   processed = False
-                                   break
-                    else:
-                        processed = False
-                        
-                    if not processed:
-                        # Delivered but needs processing. Allow ONE extra run.
-                        config_manager.log("debug", f"IS_CHANGED({unique_id}): Job '{job_id_from_state}' delivered but needs processing. Returning time().")
-                        return time.time() 
+            job_info = _livepeer_job_store.get(job_id)
+            if not job_info:
+                # Job not found - allow execution to show error
+                config_manager.log("debug", f"check_lazy_status: Job {job_id} not found in store.")
+                return []
                 
-                # Terminal state AND processed. Return stable value.
-                # Use the job_id from state as the stable identifier.
-                config_manager.log("debug", f"IS_CHANGED({unique_id}): Job '{job_id_from_state}' terminal ({current_status}) and processed. Returning stable: {job_id_from_state}")
-                return job_id_from_state
+            status = job_info.get('status', 'unknown')
+            config_manager.log("debug", f"check_lazy_status: Job {job_id} status: {status}")
             
-            # Non-terminal states (pending, completed_pending_delivery, not_found)
-            else: 
-                config_manager.log("debug", f"IS_CHANGED({unique_id}): Job '{job_id_from_state}' non-terminal ({current_status}). Returning time().")
-                return time.time()
-    # --- END IS_CHANGED --- 
+            # For pending states, allow execution (polling behavior)
+            if status in ['pending', 'completed_pending_delivery']:
+                config_manager.log("debug", f"check_lazy_status: Job {job_id} is pending - allowing execution to poll")
+                return []
+                
+            # For terminal states, prevent execution by requesting job_id again
+            # This includes 'delivered', 'failed', 'processing_error', 'type_mismatch'
+            config_manager.log("debug", f"check_lazy_status: Job {job_id} is in terminal state - preventing execution")
+            return ["job_id"]
 
     def _get_job_info(self, job_id):
         """Safely retrieves job information from the global store."""
@@ -192,20 +167,9 @@ class LivepeerJobGetterBase:
             # Clear tracker immediately after attempting cleanup, regardless of success.
             self._last_delivered_id = None
 
-    def _get_or_process_job_result(self, job_id, unique_id=None, **kwargs):
+    def _get_or_process_job_result(self, job_id, **kwargs):
         """Unified logic to get job status and either return stored/default result or process raw result."""
         
-        # Update the node instance state map with the current job_id
-        if unique_id and job_id:
-            with _node_state_lock:
-                _node_instance_state[unique_id] = {"current_job_id": job_id}
-        elif unique_id:
-             # If job_id is None/empty, maybe clear state? Or leave old?
-             # Let's clear it for now to avoid IS_CHANGED using stale ID forever.
-             with _node_state_lock:
-                 if unique_id in _node_instance_state:
-                     _node_instance_state[unique_id]["current_job_id"] = None
-
         # 1. Cleanup previously delivered job if current job_id is different
         self._cleanup_supplanted_job(job_id)
 

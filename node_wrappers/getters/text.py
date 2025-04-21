@@ -11,7 +11,7 @@ class LivepeerTextJobGetter(LivepeerJobGetterBase):
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "job_id": ("text_job", {})
+                "job_id": ("text_job", {"lazy": True})
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID" # Added hidden input
@@ -44,8 +44,8 @@ class LivepeerTextJobGetter(LivepeerJobGetterBase):
             config_manager.handle_error(e, f"Error in _process_raw_result (Text) for job {job_id}", raise_error=False)
             return None, None
 
-    def get_text_job_result(self, job_id, unique_id):
-        return self._get_or_process_job_result(job_id=job_id, unique_id=unique_id)
+    def get_text_job_result(self, job_id):
+        return self._get_or_process_job_result(job_id=job_id)
 
 NODE_CLASS_MAPPINGS = {
     "LivepeerTextJobGetter": LivepeerTextJobGetter,

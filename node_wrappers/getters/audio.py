@@ -12,7 +12,7 @@ class LivepeerAudioJobGetter(LivepeerJobGetterBase):
     # Define specific input type for audio jobs
     INPUT_TYPES_DICT = {
         "required": {
-             "job_id": ("audio_job", {})
+             "job_id": ("audio_job", {"lazy": True})
          },
          "optional": {
             "download_audio": ("BOOLEAN", {"default": True})
@@ -96,9 +96,9 @@ class LivepeerAudioJobGetter(LivepeerJobGetterBase):
             config_manager.handle_error(e, f"Error in _process_raw_result (Audio) for job {job_id}", raise_error=False)
             return None, None # Indicate failure
 
-    def get_audio_job_result(self, job_id, unique_id, download_audio=True):
-        # Pass job_id, unique_id, and download_audio (via kwargs) to base method
-        return self._get_or_process_job_result(job_id=job_id, unique_id=unique_id, download_audio=download_audio)
+    def get_audio_job_result(self, job_id, download_audio=True):
+        # Pass job_id and download_audio (via kwargs) to base method
+        return self._get_or_process_job_result(job_id=job_id, download_audio=download_audio)
 
 
 # Mappings for __init__.py

@@ -17,7 +17,7 @@ class LivepeerVideoJobGetter(LivepeerJobGetterBase):
     # Define specific input type for video jobs
     INPUT_TYPES_DICT = {
         "required": {
-             "job_id": ("video_job", {})
+             "job_id": ("video_job", {"lazy": True})
          },
          "optional": {
             "download_video": ("BOOLEAN", {"default": True})
@@ -94,9 +94,9 @@ class LivepeerVideoJobGetter(LivepeerJobGetterBase):
             config_manager.handle_error(e, f"Error in _process_raw_result (Video) for job {job_id}", raise_error=False)
             return None, None # Indicate failure
 
-    def get_video_job_result(self, job_id, unique_id, download_video=True):
-        # Pass job_id, unique_id, and download_video (via kwargs) to base method
-        return self._get_or_process_job_result(job_id=job_id, unique_id=unique_id, download_video=download_video)
+    def get_video_job_result(self, job_id, unique_id=None, download_video=True):
+        # Pass job_id and download_video (via kwargs) to base method
+        return self._get_or_process_job_result(job_id=job_id, download_video=download_video)
 
 
 NODE_CLASS_MAPPINGS = {
