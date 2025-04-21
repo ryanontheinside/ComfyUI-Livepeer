@@ -229,15 +229,6 @@ class LivepeerJobGetterBase:
         # Fallback for unexpected status
         return self.DEFAULT_OUTPUTS + (job_data['status'], 'Unexpected state')
     
-    def _get_or_process_job_result(self, job_id, unique_id=None, **kwargs):
-        """
-        Legacy wrapper for compatibility with existing getter nodes
-        
-        This method is maintained for backward compatibility with existing
-        node implementations. New implementations should use execute() directly.
-        """
-        return self.execute(job_id, unique_id, **kwargs)
-    
     def __del__(self):
         """
         Clean up on node deletion
