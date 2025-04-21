@@ -64,11 +64,16 @@ class LivepeerJobGetterBase:
     def check_lazy_status(self, job_id=None, **kwargs):
         """Controls execution based on job status.
         
-        If job_id is None, request it.
-        If job is pending, ALLOW execution by returning empty list.
-        If job is in terminal state, PREVENT execution by returning ["job_id"].
+        If job_id is None or not found, we need to evaluate it.
+        For terminal states, return empty list to prevent re-execution.
+        For pending states, return ["job_id"] to trigger re-evaluation.
+        
+        This works because:
+        1. For initial run, job_id will be None, we return ["job_id"] to get it
+        2. For pending jobs, we return ["job_id"] to force re-evaluation, causing polling
+        3. For completed jobs, we return [] which won't trigger re-evaluation of job_id
         """
-        # First run or job_id not provided yet - request it
+        # First run - job_id will be None, evaluate it
         if job_id is None:
             return ["job_id"]
         
@@ -76,22 +81,22 @@ class LivepeerJobGetterBase:
         with _job_store_lock:
             job_info = _livepeer_job_store.get(job_id)
             if not job_info:
-                # Job not found - allow execution to show error
-                config_manager.log("debug", f"check_lazy_status: Job {job_id} not found in store.")
-                return []
+                # Job not found - evaluate job_id again to try to get it
+                config_manager.log("debug", f"check_lazy_status: Job {job_id} not found in store. Re-evaluate job_id.")
+                return ["job_id"]
                 
             status = job_info.get('status', 'unknown')
             config_manager.log("debug", f"check_lazy_status: Job {job_id} status: {status}")
             
-            # For pending states, allow execution (polling behavior)
+            # For pending states, evaluate job_id again - this forces polling
             if status in ['pending', 'completed_pending_delivery']:
-                config_manager.log("debug", f"check_lazy_status: Job {job_id} is pending - allowing execution to poll")
-                return []
+                config_manager.log("debug", f"check_lazy_status: Job {job_id} is pending - requesting re-evaluation to poll")
+                return ["job_id"]
                 
-            # For terminal states, prevent execution by requesting job_id again
+            # For terminal states, don't re-evaluate job_id - prevents further execution
             # This includes 'delivered', 'failed', 'processing_error', 'type_mismatch'
-            config_manager.log("debug", f"check_lazy_status: Job {job_id} is in terminal state - preventing execution")
-            return ["job_id"]
+            config_manager.log("debug", f"check_lazy_status: Job {job_id} is in terminal state - no re-evaluation needed")
+            return []
 
     def _get_job_info(self, job_id):
         """Safely retrieves job information from the global store."""
