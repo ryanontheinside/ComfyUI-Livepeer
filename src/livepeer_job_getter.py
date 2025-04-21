@@ -13,7 +13,19 @@ BLANK_IMAGE = torch.zeros((1, BLANK_HEIGHT, BLANK_WIDTH, 3), dtype=torch.float32
 _livepeer_job_store = {}
 _job_store_lock = threading.Lock()
 
+
+# --- This is specifically fro use in the IS_CHANGED method ---
+_node_instance_state = {}
+_node_state_lock = threading.Lock()
+# --------------------------------------------------
 # NOTE:
+
+# The IS_CHANGED work around is to meet the following requirements for POLLING:
+# 1. Execute the node when the job is in the pending state.
+# 2. Do NOT execute the node when the job is in a terminal state.
+
+# This workaround in needed because IS_CHANGED does not evaluate LINK, only widgets and predefined hidden inputs.
+
 # PROBLEMS WITH IS_CHANGED WORK AROUND
 
 # Risk: State Desynchronization on Error/Interruption
@@ -27,12 +39,13 @@ _job_store_lock = threading.Lock()
 # Problem: The _node_instance_state map grows indefinitely as new node instances are created or process different jobs.
 # Mitigation: The cleanest solution is often to use a Least Recently Used (LRU) cache with a fixed size instead of a plain dictionary. This automatically discards old entries. Implementing a full LRU cache might add complexity or dependencies. A simpler approach for now is to acknowledge the issue. We can add a comment recommending replacing the dict with an LRU cache later if memory usage becomes a concern. No immediate code change, but noted for future improvement.
 
+# Other possible solutions for POLLING:
+# 1. Move most of the polling logic from the job getter nodes upstream to the main node that sends the request. 
+# Then, use a combination of IS_CHANGED and check_lazy_status to fulfil the requirements.
+# 2. Create an entirely separate service that polls for jobs and manages jobs
 
 
-# --- This is specifically fro use in the IS_CHANGED method ---
-_node_instance_state = {}
-_node_state_lock = threading.Lock()
-# --------------------------------------------------
+
 
 class LivepeerJobGetterBase:
     """Base class for Livepeer Job Getter nodes."""
