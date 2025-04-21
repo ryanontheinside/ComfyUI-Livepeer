@@ -16,7 +16,8 @@ import sys
 import comfy.model_management
 from ..config_manager import config_manager
 
-from .livepeer_job_getter import _livepeer_job_store, _job_store_lock
+# Import the job service instead of the job store
+from .livepeer_job_service import livepeer_service
 
 class LivepeerBase:
     """Base class for Livepeer nodes with common functionality and retry logic"""
@@ -41,35 +42,34 @@ class LivepeerBase:
     
     def _execute_livepeer_operation(self, api_key, max_retries, retry_delay, operation_func, job_id, job_type):
         """Internal method to run the operation and update the job store."""
-        global _livepeer_job_store, _job_store_lock
         try:
-            # Store job type immediately for getter node reference
-            with _job_store_lock:
-                 if job_id in _livepeer_job_store:
-                     _livepeer_job_store[job_id]['type'] = job_type
-
             config_manager.log("info", f"Livepeer Async Job {job_id} ({job_type}): Starting execution.")
             result = self.execute_with_retry(api_key, max_retries, retry_delay, operation_func)
             config_manager.log("info", f"Livepeer Async Job {job_id} ({job_type}): Execution successful.")
-            with _job_store_lock:
-                # Set intermediate status indicating completion but pending delivery by getter node
-                if job_id in _livepeer_job_store: # Check if job wasn't cancelled/removed
-                    _livepeer_job_store[job_id].update({'status': 'completed_pending_delivery', 'result': result})
+            
+            # Update job in service instead of job store
+            livepeer_service.update_job(job_id, {
+                'status': 'completed_pending_delivery', 
+                'result': result
+            })
+            
         except Exception as e:
             config_manager.log("error", f"Livepeer Async Job {job_id} ({job_type}): Execution failed.")
             config_manager.handle_error(e, f"Error in async job {job_id}", raise_error=False)
-            with _job_store_lock:
-                 if job_id in _livepeer_job_store: # Check if job wasn't cancelled/removed
-                    _livepeer_job_store[job_id].update({'status': 'failed', 'error': str(e)})
+            
+            # Update job with error in service
+            livepeer_service.update_job(job_id, {
+                'status': 'failed', 
+                'error': str(e)
+            })
 
     def trigger_async_job(self, api_key, max_retries, retry_delay, operation_func, job_type):
         """Initiates the Livepeer operation in a background thread and returns a job ID."""
-        global _livepeer_job_store, _job_store_lock
         job_id = str(uuid.uuid4())
 
-        with _job_store_lock:
-            _livepeer_job_store[job_id] = {'status': 'pending', 'type': job_type} # Initial state
-
+        # Register job with service
+        livepeer_service.register_job(job_id, job_type, api_key=None, is_sync=False)
+        
         config_manager.log("info", f"Livepeer Async Job {job_id} ({job_type}): Triggered.")
 
         thread = threading.Thread(
@@ -81,19 +81,10 @@ class LivepeerBase:
         return job_id
         
     def _store_sync_result(self, job_id, job_type, result):
-        """Stores synchronous operation result in the job store for retrieval by getter nodes."""
-
-        #NOTE: the choice to make sync results retrievable only by using the job getter is to handle 
-        # both syncronous and asyncronuous operations in ComfyUI - if the job is asyncrounous, 
-        # we cannot have the main node return some arbitrary result, like a blank image of arbitrary size
-        global _livepeer_job_store, _job_store_lock
+        """Stores synchronous operation result in the job service for retrieval by getter nodes."""
         
-        with _job_store_lock:
-            _livepeer_job_store[job_id] = {
-                'status': 'completed_pending_delivery',
-                'type': job_type,
-                'result': result
-            }
+        # Use the service to store the result
+        livepeer_service.register_job(job_id, job_type, is_sync=True, result=result)
         config_manager.log("info", f"Livepeer Sync Job {job_id} ({job_type}): Result stored for getter")
 
     # Helper for synchronous execution thread
